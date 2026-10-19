@@ -1,0 +1,928 @@
+# -*- coding: utf-8 -*-
+"""
+AEROTUN — Application Streamlit : sobriété, efficacité énergétique et photovoltaïque.
+
+Lancer :   streamlit run app.py
+Installer: pip install streamlit pandas numpy plotly statsmodels scipy openpyxl
+"""
+import io
+import json
+import os
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import statsmodels.formula.api as smf
+import streamlit as st
+from scipy.optimize import brentq
+
+# ----------------------------------------------------------------------------
+# CONFIGURATION
+# ----------------------------------------------------------------------------
+DATA_PATH = os.environ.get(
+    "AEROTUN_DATA",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "Aerotun.xlsx"),
+)
+SHEET = "Feuil1"
+
+
+def _version_streamlit():
+    try:
+        return tuple(int(x) for x in st.__version__.split(".")[:2])
+    except Exception:
+        return (1, 0)
+
+
+# Largeur pleine : paramètre « width » (Streamlit >= 1.50) ou « use_container_width » (anciennes versions)
+STRETCH = {"width": "stretch"} if _version_streamlit() >= (1, 50) else {"use_container_width": True}
+
+st.set_page_config(page_title="AEROTUN — Transition énergétique", page_icon="⚡", layout="wide")
+
+st.markdown(
+    """
+    <style>
+    .hero {background: linear-gradient(120deg,#0b3d91 0%,#1b6ca8 60%,#2ec4b6 100%);
+           padding: 28px 32px; border-radius: 14px; color: white; margin-bottom: 18px;}
+    .hero h1 {margin: 0 0 6px 0; font-size: 2.0rem; color: white;}
+    .hero p {margin: 0; font-size: 1.05rem; opacity: .95;}
+    .pill {display:inline-block; padding:3px 12px; border-radius:20px; background:#e8f1fb;
+           color:#0b3d91; font-size:.82rem; margin-right:6px;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+COLONNES_NUM = [
+    "Heures-machine CNC", "Cycles autoclave", "Conso. électrique (kWh)", "Taux fuites air comprimé (%)",
+    "Temp. salle blanche (°C)", "Humidité salle blanche (%)", "Taux rebut qualité (%)",
+    "Part heures pleines (%)", "Coût énergie (TND)", "IPE élec. (kWh/h-machine)",
+]
+RENOMMAGE = {
+    "Conso. électrique (kWh)": "kwh", "Coût énergie (TND)": "cout", "Heures-machine CNC": "cnc",
+    "Cycles autoclave": "autoclave", "Taux fuites air comprimé (%)": "fuites",
+    "Temp. salle blanche (°C)": "temp", "Humidité salle blanche (%)": "hum",
+    "Taux rebut qualité (%)": "rebut", "Part heures pleines (%)": "hp",
+    "Anomalie climatisation": "anom", "Arrêt annuel": "arret",
+}
+JOURS_NON_OUVRES = [5, 6]
+SEUIL_P = 0.05
+
+# ----------------------------------------------------------------------------
+# PARAMÈTRES PAR DÉFAUT (modifiables dans la page « Paramètres »)
+# ----------------------------------------------------------------------------
+P_DEFAUT = dict(
+    taux=0.10, g=0.03, infl=0.055, fe=0.58, prix_carbone=50.0, usd=3.0,
+    pv_kwc=150.0, pv_prod=1650.0, pv_capex_kwc=2500.0, pv_opex_kwc=62.0, pv_remp_an=12, pv_remp_part=0.10,
+    tarif_vente=0.12, pv_surplus_max=0.30, pv_deg=0.005,
+    capex_sob=5000.0, opex_sob=0.0, capex_eff=85000.0, opex_eff=2000.0,
+    vie_sob=5, vie_eff=10, vie_pv=20,
+    ancre_auto=0.16, ancre_cnc=0.12, ancre_veille=0.60, part_veille=0.15,
+    tr_prudent=1 / 3, tr_central=2 / 3, tr_ambitieux=1.0,
+    fte=False, fte_pv=0.20, fte_pv_plafond=200000.0, fte_eff=0.50,
+)
+ANOMALIES_EVITEES = {"Prudent": 0.50, "Central": 0.75, "Ambitieux": 1.00}
+WEEKEND_ARRET = {"Prudent": 0.15, "Central": 0.30, "Ambitieux": 0.50}
+FUITES_CIBLE = {"Prudent": 11.0, "Central": 10.0, "Ambitieux": 8.0}
+PROJETS = ["Sobriété", "Efficacité", "Photovoltaïque"]
+COULEURS = {"Sobriété": "#2ec4b6", "Efficacité": "#e71d36", "Photovoltaïque": "#ff9f1c"}
+
+# ----------------------------------------------------------------------------
+# DONNÉES DE L'ENTREPRISE (dictionnaire et indicateurs fournis)
+# ----------------------------------------------------------------------------
+DICTIONNAIRE = pd.DataFrame(
+    [
+        ["Date", "Date du relevé journalier", "jj/mm/aaaa"],
+        ["Jour de la semaine", "Jour calendaire", "texte"],
+        ["Mois / Année", "Composantes calendaires de la date", "entier"],
+        ["Heures-machine CNC", "Total des heures de fonctionnement des centres d'usinage CNC dans la journée", "heures/jour"],
+        ["Cycles autoclave", "Nombre de cycles de cuisson de pièces composites réalisés dans la journée", "cycles/jour"],
+        ["Conso. électrique (kWh)", "Consommation électrique totale du site (usinage, autoclave, HVAC, air comprimé, fixe)", "kWh/jour"],
+        ["Taux fuites air comprimé (%)", "Part estimée de l'air comprimé produit perdue en fuites sur le réseau", "%"],
+        ["Temp. salle blanche (°C)", "Température de consigne mesurée dans la salle blanche de drapage composites (cible 21°C)", "°C"],
+        ["Humidité salle blanche (%)", "Humidité relative mesurée dans la salle blanche (cible ~45 %)", "%"],
+        ["Taux rebut qualité (%)", "Part des pièces rejetées au contrôle qualité dans la journée", "%"],
+        ["Part heures pleines (%)", "Part de la consommation électrique facturée en heures pleines", "%"],
+        ["Coût énergie (TND)", "Coût énergétique journalier estimé (100 % électrique), tarifs indicatifs", "TND/jour"],
+        ["IPE élec. (kWh/h-machine)", "Indicateur de performance énergétique électrique, rapporté à l'heure-machine CNC", "kWh/heure-machine"],
+        ["Anomalie climatisation", "1 = dérive avérée de la climatisation de la salle blanche précédant une intervention ; 0 = normal", "binaire"],
+        ["Arrêt annuel", "1 = congé industriel d'été (~10 jours ouvrés en août) ; à exclure des moyennes de fonctionnement normal", "binaire"],
+    ],
+    columns=["Variable (colonne)", "Description", "Unité"],
+)
+AGREGATS = pd.DataFrame(
+    [
+        ["Nombre de jours couverts (total)", 730.0, "Sur la période 2023-2024"],
+        ["Nombre de jours d'arrêt annuel", 24.0, "Congé industriel d'été, 2 occurrences"],
+        ["Heures-machine CNC totales hors arrêt", 93995.3, ""],
+        ["Cycles autoclave totaux", 862.0, ""],
+        ["Consommation électrique totale (kWh)", 6276711.0, "Site 100 % électrique"],
+        ["Coût énergétique total (TND)", 2019095.1, "Tarifs indicatifs"],
+        ["Taux de fuites moyen — 1ère moitié de période", 22.1, "Avant la campagne de réparation"],
+        ["Taux de fuites moyen — 2nde moitié de période", 12.8, "Après la campagne de réparation"],
+        ["Taux de rebut qualité moyen (%) hors arrêt", 1.8, "Sensible aux dérives de climatisation"],
+        ["Nombre de jours en anomalie climatisation", 51.0, "Répartis sur 3 épisodes de dérive"],
+    ],
+    columns=["Indicateur", "Valeur", "Commentaire"],
+)
+
+
+# ----------------------------------------------------------------------------
+# CHARGEMENT ET NETTOYAGE
+# ----------------------------------------------------------------------------
+def _num(s: pd.Series) -> pd.Series:
+    s = s.astype(str).str.replace(r"\s+", "", regex=True).str.replace(",", ".", regex=False)
+    return pd.to_numeric(s, errors="coerce")
+
+
+def nettoyer(brut: pd.DataFrame) -> pd.DataFrame:
+    df = brut.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+    for c in COLONNES_NUM:
+        if c in df.columns:
+            df[c] = _num(df[c])
+    for c in ["Anomalie climatisation", "Arrêt annuel"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
+
+    dt = df["Date"] if pd.api.types.is_datetime64_any_dtype(df["Date"]) else pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
+    if "Mois" in df.columns and dt.notna().any():
+        mois = pd.to_numeric(df["Mois"], errors="coerce")
+        if (dt.dt.month != mois).mean() > 0.5:      # jour et mois inversés à la lecture d'Excel
+            dt = pd.to_datetime(dict(year=dt.dt.year, month=dt.dt.day, day=dt.dt.month), errors="coerce")
+    df["Date"] = dt
+    df = df.dropna(subset=["Date"]).sort_values("Date").drop_duplicates("Date").reset_index(drop=True)
+    return df
+
+
+def preparer(df: pd.DataFrame) -> pd.DataFrame:
+    d = df.rename(columns=RENOMMAGE).copy()
+    requis = ["kwh", "cout", "cnc", "autoclave", "fuites", "temp", "hp", "anom", "arret"]
+    d = d.dropna(subset=[c for c in requis if c in d.columns]).reset_index(drop=True)
+    d["dow"] = d["Date"].dt.dayofweek
+    d["type_jour"] = np.where(d["arret"] == 1, "Arrêt annuel", np.where(d["dow"].isin(JOURS_NON_OUVRES), "Week-end", "Ouvré"))
+    d["est_weekend"] = d["dow"].isin(JOURS_NON_OUVRES).astype(int)
+    d["est_arret_annuel"] = d["arret"].astype(int)
+    d["mois"] = d["Date"].dt.to_period("M").astype(str)
+    return d
+
+
+@st.cache_data(show_spinner="Lecture du fichier Excel…")
+def lire_chemin(path: str, mtime: float) -> pd.DataFrame:
+    return nettoyer(pd.read_excel(path, sheet_name=SHEET))
+
+
+@st.cache_data(show_spinner="Lecture du fichier Excel…")
+def lire_octets(contenu: bytes) -> pd.DataFrame:
+    return nettoyer(pd.read_excel(io.BytesIO(contenu), sheet_name=SHEET))
+
+
+def charger_donnees():
+    if os.path.exists(DATA_PATH):
+        return lire_chemin(DATA_PATH, os.path.getmtime(DATA_PATH)), DATA_PATH
+    st.sidebar.warning(f"Fichier introuvable :\n{DATA_PATH}")
+    fichier = st.sidebar.file_uploader("Charger Aerotun.xlsx", type=["xlsx"])
+    if fichier is not None:
+        return lire_octets(fichier.getvalue()), "fichier chargé"
+    return None, None
+
+
+# ----------------------------------------------------------------------------
+# ANALYSE (modèles, gisements, finance)
+# ----------------------------------------------------------------------------
+def modele_pareto(d):
+    variables = ["cnc", "autoclave", "fuites"]
+    while True:
+        m = smf.ols("kwh ~ " + " + ".join(variables), data=d).fit()
+        p, c = m.pvalues.drop("Intercept"), m.params.drop("Intercept")
+        mauvaises = p[(p > SEUIL_P) | (c < 0)]
+        if mauvaises.empty or len(variables) == 1:
+            return m, variables
+        variables.remove(mauvaises.idxmax() if (p > SEUIL_P).any() else c.idxmin())
+
+
+def comparaison_modeles(d):
+    formules = {
+        "M1 : CNC + autoclave": "kwh ~ cnc + autoclave",
+        "M2 : M1 + température": "kwh ~ cnc + autoclave + temp",
+        "M6 : M2 + week-end + arrêt annuel": "kwh ~ cnc + autoclave + temp + est_weekend + est_arret_annuel",
+    }
+    lignes, objets = [], {}
+    for nom, f in formules.items():
+        if "est_arret_annuel" in f and d["est_arret_annuel"].nunique() < 2:
+            continue
+        m = smf.ols(f, data=d).fit()
+        n, k = len(d), len(m.params)
+        rmse = np.sqrt((m.resid ** 2).sum() / (n - k))
+        lignes.append({"Modèle": nom, "R² ajusté": m.rsquared_adj, "CV(RMSE) %": rmse / d["kwh"].mean() * 100,
+                       "AIC": m.aic, "p max": m.pvalues.drop("Intercept").max()})
+        objets[nom] = m
+    return pd.DataFrame(lignes).set_index("Modèle"), objets
+
+
+def cout_tarif(d):
+    return d["cout"].sum() / d["kwh"].sum()
+
+
+def autoconso_pv(d, P, kwc, facteur_residuel=1.0):
+    prod_an = kwc * P["pv_prod"]
+    prod_j = prod_an / 365.0
+    auto_j = np.minimum(prod_j, d["kwh"] * facteur_residuel * d["hp"] / 100.0)
+    taux = auto_j.sum() / (prod_j * len(d))
+    return taux, taux * prod_an, (1 - taux) * prod_an, auto_j
+
+
+def flux_projet(sp, P, tarif, g=None):
+    g = P["g"] if g is None else g
+    f = [-sp["capex"]]
+    for t in range(1, sp["duree"] + 1):
+        fp = (1 - sp["deg"]) ** (t - 1)
+        eco = sp["kwh"] * fp * tarif * (1 + g) ** (t - 1)
+        vente = sp["surplus"] * fp * P["tarif_vente"]
+        opex = sp["opex"] * (1 + P["infl"]) ** (t - 1)
+        f.append(eco + vente - opex - sp["remp"].get(t, 0.0))
+    return np.array(f)
+
+
+def van(flux, a):
+    return sum(x / (1 + a) ** t for t, x in enumerate(flux))
+
+
+def tri(flux):
+    if not (flux[0] < 0 and flux[1:].sum() > 0):
+        return np.nan
+    try:
+        return brentq(lambda r: van(flux, r), -0.99, 1000.0)
+    except ValueError:
+        return np.nan
+
+
+def payback(flux, a=0.0):
+    cum = flux[0]
+    for t in range(1, len(flux)):
+        v = flux[t] / (1 + a) ** t
+        if cum < 0 <= cum + v:
+            return t - 1 + (-cum) / v
+        cum += v
+    return np.nan
+
+
+def evaluer(sp, P, tarif, a=None, g=None):
+    a = P["taux"] if a is None else a
+    n = sp["duree"]
+    fl = flux_projet(sp, P, tarif, g)
+    v = van(fl, a)
+    fa = a * (1 + a) ** n / ((1 + a) ** n - 1)
+    kwh_t = np.array([sp["kwh"] * (1 - sp["deg"]) ** (t - 1) for t in range(1, n + 1)])
+    opex_t = np.array([sp["opex"] * (1 + P["infl"]) ** (t - 1) + sp["remp"].get(t, 0.0) for t in range(1, n + 1)])
+    actu = np.array([(1 + a) ** -t for t in range(1, n + 1)])
+    cga = sp["capex"] + (opex_t * actu).sum()
+    co2_t = kwh_t * P["fe"] / 1000.0
+    ae = v * fa
+    t_ = tri(fl)
+    return {
+        "Projet": sp["nom"], "Durée (ans)": n, "CAPEX (TND)": sp["capex"], "Économie (kWh/an, an 1)": sp["kwh"],
+        "Économie nette an 1 (TND)": fl[1], "VAN (TND)": v, "VAN/I": v / sp["capex"],
+        "TRI (%)": t_ * 100 if pd.notna(t_) else np.nan,
+        "Payback simple (ans)": sp["capex"] / fl[1] if fl[1] > 0 else np.nan,
+        "Payback actualisé (ans)": payback(fl, a), "AE (TND/an)": ae,
+        "LCOE / coût de l'énergie (TND/kWh)": cga / (kwh_t * actu).sum(),
+        "CO2 évité an 1 (t)": co2_t[0], "CO2 évité moy. (t/an)": co2_t.mean(),
+        "Coût d'abattement (TND/tCO2)": -ae / co2_t.mean() if co2_t.mean() > 0 else np.nan,
+        "VAN avec valeur carbone (TND)": v + (co2_t * actu).sum() * P["prix_carbone"],
+        "flux": fl,
+    }
+
+
+def spec(nom, kwh, P, surplus=0.0, capex=None, opex=None, remp=None):
+    cle = {"Sobriété": "sob", "Efficacité": "eff", "Photovoltaïque": "pv"}[nom]
+    return dict(nom=nom, kwh=float(kwh), surplus=float(surplus),
+                capex=float(P.get("capex_" + cle, 0.0) if capex is None else capex),
+                opex=float(P.get("opex_" + cle, 0.0) if opex is None else opex),
+                duree=int(P["vie_" + cle]), deg=P["pv_deg"] if nom == "Photovoltaïque" else 0.0, remp=remp or {})
+
+
+def scenarios_params(P):
+    tr = {"Prudent": P["tr_prudent"], "Central": P["tr_central"], "Ambitieux": P["tr_ambitieux"]}
+    return {
+        sc: {"talon_evitable": P["ancre_veille"] * P["part_veille"] * t, "anomalies_evitees": ANOMALIES_EVITEES[sc],
+             "weekend_arret": WEEKEND_ARRET[sc], "fuites_cible": FUITES_CIBLE[sc],
+             "gain_autoclave": P["ancre_auto"] * t, "gain_cnc": P["ancre_cnc"] * t}
+        for sc, t in tr.items()
+    }
+
+
+@st.cache_data(show_spinner="Calcul des modèles et des gisements…")
+def analyser(d: pd.DataFrame, P_json: str):
+    P = json.loads(P_json)
+    n = len(d)
+    fact_an = 365.0 / n
+    R = {"n": n, "fact_an": fact_an}
+    R["conso_an"] = d["kwh"].sum() * fact_an
+    R["cout_an"] = d["cout"].sum() * fact_an
+    R["tarif"] = cout_tarif(d)
+
+    # --- Pareto des usages (modèle CNC + autoclave + fuites)
+    m_par, variables = modele_pareto(d)
+    noms = {"cnc": "Usinage CNC", "autoclave": "Autoclave", "fuites": "Fuites d'air comprimé", "Intercept": "Consommation de base (talon)"}
+    contrib = {noms["Intercept"]: m_par.params["Intercept"] * n}
+    for v in variables:
+        contrib[noms[v]] = m_par.params[v] * d[v].sum()
+    usage = pd.Series(contrib).sort_values(ascending=False) * fact_an
+    R["usage_an"] = usage
+    R["pareto"] = pd.DataFrame({"kWh/an": usage, "% kWh": usage / usage.sum() * 100,
+                                "% cumulé": usage.cumsum() / usage.sum() * 100})
+    R["talon_jour"] = float(m_par.params["Intercept"])
+    R["c_fuites"] = float(m_par.params.get("fuites", np.nan))
+
+    # --- Comparaison des modèles M1, M2, M6
+    R["comp_modeles"], objets = comparaison_modeles(d)
+
+    # --- Effet de l'arrêt annuel (M6) et anomalies HVAC
+    m6 = objets.get("M6 : M2 + week-end + arrêt annuel")
+    R["coef_arret"] = float(m6.params["est_arret_annuel"]) if m6 is not None else 0.0
+    R["p_arret"] = float(m6.pvalues["est_arret_annuel"]) if m6 is not None else np.nan
+    R["coef_we"] = float(m6.params["est_weekend"]) if m6 is not None else 0.0
+    R["p_we"] = float(m6.pvalues["est_weekend"]) if m6 is not None else np.nan
+    R["arret_ok"] = (R["coef_arret"] < 0) and (R["p_arret"] <= SEUIL_P)
+    R["coef_anom"], R["p_anom"] = 0.0, np.nan
+    if d["anom"].nunique() > 1:
+        m_a = smf.ols("kwh ~ cnc + autoclave + fuites + anom", data=d).fit()
+        R["coef_anom"], R["p_anom"] = float(m_a.params["anom"]), float(m_a.pvalues["anom"])
+    R["anom_ok"] = (R["coef_anom"] > 0) and (R["p_anom"] <= SEUIL_P)
+
+    R["jours_we"] = (d["type_jour"] == "Week-end").sum() * fact_an
+    R["jours_ouvres"] = (d["type_jour"] == "Ouvré").sum() * fact_an
+    R["jours_anom"] = d["anom"].sum() * fact_an
+    R["talon_ouvres_an"] = R["talon_jour"] * R["jours_ouvres"]
+    R["mesure_arret"] = float(d.loc[d["arret"] == 1, "kwh"].mean()) if (d["arret"] == 1).any() else np.nan
+
+    # --- Fuites résiduelles (période de suivi = 2e année)
+    d_post = d[d["Date"] > d["Date"].min() + pd.Timedelta(days=365)]
+    SC = scenarios_params(P)
+
+    def gain_fuites(cible):
+        if not (R["c_fuites"] > 0) or len(d_post) == 0:
+            return 0.0
+        return R["c_fuites"] * (d_post["fuites"] - cible).clip(lower=0).sum() * 365.0 / len(d_post)
+
+    sav = {}
+    for sc, s in SC.items():
+        veille = R["talon_ouvres_an"] * s["talon_evitable"]
+        weekend = abs(R["coef_arret"]) * R["jours_we"] * s["weekend_arret"] if R["arret_ok"] else 0.0
+        anom = R["coef_anom"] * R["jours_anom"] * s["anomalies_evitees"] if R["anom_ok"] else 0.0
+        fuites = gain_fuites(s["fuites_cible"])
+        auto = float(usage.get(noms["autoclave"], 0.0)) * s["gain_autoclave"]
+        cnc = float(usage.get(noms["cnc"], 0.0)) * s["gain_cnc"]
+        sav[sc] = {"Veille jours ouvrés": veille, "Week-ends en mode arrêt": weekend, "Anomalies HVAC": anom,
+                   "Fuites résiduelles": fuites, "Autoclave": auto, "Usinage CNC": cnc}
+    R["savings"] = pd.DataFrame(sav).T
+
+    # --- Projets, par scénario
+    res, specs_sc, taux_pv = {}, {}, {}
+    for sc in SC:
+        s_ = R["savings"].loc[sc]
+        eco_sob = s_[["Veille jours ouvrés", "Week-ends en mode arrêt", "Anomalies HVAC"]].sum()
+        eco_eff = s_[["Fuites résiduelles", "Autoclave", "Usinage CNC"]].sum()
+        fr = 1 - (eco_sob + eco_eff) / R["conso_an"]
+        taux, auto, surplus, _ = autoconso_pv(d, P, P["pv_kwc"], fr)
+        surplus = min(surplus, P["pv_surplus_max"] * (auto + surplus))
+        capex_pv = P["pv_kwc"] * P["pv_capex_kwc"]
+        sp_pv = spec("Photovoltaïque", auto, P, surplus, capex=capex_pv, opex=P["pv_kwc"] * P["pv_opex_kwc"],
+                     remp={int(P["pv_remp_an"]): P["pv_remp_part"] * capex_pv})
+        sps = [spec("Sobriété", eco_sob, P), spec("Efficacité", eco_eff, P), sp_pv]
+        if P["fte"]:
+            sps[1]["capex"] -= P["fte_eff"] * sps[1]["capex"]
+            sps[2]["capex"] -= min(P["fte_pv"] * sps[2]["capex"], P["fte_pv_plafond"])
+        specs_sc[sc], taux_pv[sc] = sps, taux
+        res[sc] = {sp["nom"]: evaluer(sp, P, R["tarif"]) for sp in sps}
+    R["specs"], R["taux_pv"], R["res"] = specs_sc, taux_pv, res
+    return R
+
+
+# ----------------------------------------------------------------------------
+# COMPOSANTS D'INTERFACE
+# ----------------------------------------------------------------------------
+def hero(titre, sous_titre):
+    st.markdown(f'<div class="hero"><h1>{titre}</h1><p>{sous_titre}</p></div>', unsafe_allow_html=True)
+
+
+def fmt(x, nd=0, suffixe=""):
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return "n.d."
+    return f"{x:,.{nd}f}".replace(",", " ") + suffixe
+
+
+def ressources(liste):
+    st.markdown("**Ressources**")
+    for nom, lien in liste:
+        st.markdown(f"- [{nom}]({lien})" if lien else f"- {nom}")
+
+
+# ----------------------------------------------------------------------------
+# PAGES
+# ----------------------------------------------------------------------------
+def page_overview(d, R):
+    hero("AEROTUN — Stratégie énergétique", "Sobriété, efficacité énergétique et photovoltaïque : que faire, dans quel ordre, et pour quel retour ?")
+    st.markdown('<span class="pill">Site 100 % électrique</span><span class="pill">CNC + autoclave + salle blanche</span>'
+                '<span class="pill">Tunisie</span>', unsafe_allow_html=True)
+    st.subheader("Problématique")
+    chiffres = (f" Le site consomme environ **{fmt(R['conso_an'] / 1e6, 2)} GWh/an** pour **{fmt(R['cout_an'] / 1e3, 0)} kTND/an** "
+                f"(tarif moyen {R['tarif']:.3f} TND/kWh)." if R else "")
+    st.info(
+        "AEROTUN est un site aéronautique tunisien dont l'activité repose sur des centres d'usinage CNC, des autoclaves de cuisson "
+        "de composites et une salle blanche climatisée." + chiffres +
+        "\n\n**Comment réduire cette facture et les émissions associées (scope 2) sans compromettre la qualité de la salle blanche, "
+        "et quel portefeuille d'investissements retenir entre sobriété, efficacité énergétique et photovoltaïque ?**"
+    )
+    st.subheader("Objectif")
+    st.markdown(
+        "1. **Comprendre** la consommation : normaliser par l'activité (heures CNC, cycles d'autoclave) et distinguer jours ouvrés, week-ends et arrêt annuel.\n"
+        "2. **Chiffrer les gisements** de sobriété et d'efficacité à partir des données de l'entreprise et de benchmarks (aéronautique, Tunisie).\n"
+        "3. **Dimensionner** une centrale photovoltaïque d'autoconsommation.\n"
+        "4. **Évaluer** chaque projet : VAN, TRI, temps de retour, VAN/I, annuité équivalente, LCOE, CO₂ évité, coût d'abattement.\n"
+        "5. **Choisir** par optimisation multi-objectifs (énergie, économie, environnement)."
+    )
+    c1, c2, c3 = st.columns(3)
+    c1.markdown("##### 🟢 Sobriété\nSupprimer les consommations inutiles : veille, week-ends, dérives de climatisation.")
+    c2.markdown("##### 🔴 Efficacité\nAméliorer les équipements : fuites d'air comprimé, cycle d'autoclave, usinage CNC.")
+    c3.markdown("##### 🟠 Photovoltaïque\nProduire sur place et autoconsommer, avec injection plafonnée du surplus.")
+    if R:
+        st.subheader("Le site en chiffres")
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Consommation annuelle", fmt(R["conso_an"] / 1e6, 2, " GWh"))
+        k2.metric("Coût énergétique annuel", fmt(R["cout_an"] / 1e3, 0, " kTND"))
+        k3.metric("Jours analysés", fmt(R["n"]))
+        k4.metric("Émissions annuelles (scope 2)", fmt(R["conso_an"] * st.session_state["P"]["fe"] / 1000, 0, " tCO₂"))
+    st.subheader("Comment naviguer")
+    st.table(pd.DataFrame({
+        "Page": ["Chapitre I", "Données de l'entreprise", "Paramètres", "Benchmarking", "Dashboard"],
+        "Contenu": ["Histoire de la consommation : corrélations, modèles, formules, ressources",
+                    "Dictionnaire de données, indicateurs agrégés, contrôle de cohérence",
+                    "Hypothèses chiffrées, sources, modification interactive",
+                    "Cas d'entreprises utilisés (aéronautique, Tunisie, industrie)",
+                    "Les trois piliers : maths, données, ressources, choix final"],
+    }))
+
+
+def page_chapitre1(d, R):
+    hero("Chapitre I — Comprendre la consommation", "Avant d'économiser, il faut savoir ce qui consomme, et de combien.")
+    P = st.session_state["P"]
+
+    st.header("Scène 1 · Un site, trois gros mangeurs d'énergie")
+    corr_cnc = d["kwh"].corr(d["cnc"])
+    corr_auto = d["kwh"].corr(d["autoclave"])
+    st.markdown(
+        f"Chaque jour, le site relève sa consommation électrique, l'activité des centres d'usinage et le nombre de cycles d'autoclave. "
+        f"Le premier constat est net : la consommation suit l'activité. Sa corrélation avec les heures-machine CNC est de **{corr_cnc:.2f}** "
+        f"et avec les cycles d'autoclave de **{corr_auto:.2f}**. Mais une partie ne dépend d'aucune machine : le **talon** "
+        f"(climatisation de la salle blanche, air comprimé, éclairage, auxiliaires)."
+    )
+
+    st.header("Scène 2 · Ce que disent les corrélations")
+    variables = {"cnc": "Heures CNC", "autoclave": "Cycles autoclave", "kwh": "Conso. (kWh)", "fuites": "Fuites (%)",
+                 "temp": "Température", "hum": "Humidité", "rebut": "Rebut (%)", "hp": "Heures pleines (%)", "cout": "Coût (TND)"}
+    cols = [c for c in variables if c in d.columns]
+    dd = d[cols].copy()
+    dd["Émissions (tCO₂)"] = d["kwh"] * P["fe"] / 1000
+    corr = dd.rename(columns=variables).corr()
+    fig = px.imshow(corr, text_auto=".2f", color_continuous_scale="RdBu_r", zmin=-1, zmax=1, aspect="auto",
+                    title="Matrice de corrélation — production, énergie, coût et émissions")
+    fig.update_layout(height=560)
+    st.plotly_chart(fig, **STRETCH)
+    st.caption("Lecture : le coût et les émissions sont des dérivés de la consommation (corrélation 1) ; le taux de rebut et la température "
+               "rappellent le lien entre dérives de climatisation et qualité.")
+    st.latex(r"r_{xy}=\frac{\operatorname{cov}(x,y)}{\sigma_x\,\sigma_y}\qquad \text{tCO}_2=\frac{E_{\text{kWh}}\times FE}{1000}")
+
+    st.header("Scène 3 · Normaliser l'activité : la régression")
+    st.markdown("Une journée chargée consomme naturellement plus qu'une journée calme. Pour juger la performance, on compare la consommation "
+                "observée à celle **attendue pour l'activité du jour**.")
+    st.latex(r"E_t=\beta_0+\beta_1H_t+\beta_2C_t+\beta_3T_t+\beta_4W_t+\beta_5A_t+\varepsilon_t")
+    st.markdown("avec $E_t$ la consommation (kWh), $H_t$ les heures-machine CNC, $C_t$ les cycles d'autoclave, $T_t$ la température de la salle "
+                "blanche, $W_t$ l'indicateur de week-end et $A_t$ l'indicateur d'arrêt annuel.")
+    st.latex(r"\text{IPE}=\frac{E}{H}\qquad R^2_{aj}\ge 0{,}75\quad CV(RMSE)\le 25\,\%\ \ (\text{ISO 50001, IPMVP, ASHRAE 14})")
+    comp = R["comp_modeles"].copy()
+    st.dataframe(comp.style.format({"R² ajusté": "{:.3f}", "CV(RMSE) %": "{:.2f}", "AIC": "{:.0f}", "p max": "{:.3f}"}), **STRETCH)
+    st.caption("Autres modèles testés et écartés : ajout de l'humidité (non significative, p = 0,63) et du jour de la semaine (non significatif, p = 0,51) ; "
+               "le week-end seul est remplacé par M6, car l'arrêt annuel explique l'écart.")
+    if R["arret_ok"]:
+        st.success(f"Modèle M6 : l'arrêt annuel retire en moyenne **{abs(R['coef_arret']):,.0f} kWh/jour**, alors que les week-ends "
+                   f"consomment comme un jour ouvré à activité nulle (effet {R['coef_we']:+.0f} kWh/j, p = {R['p_we']:.2f}). "
+                   f"Le site sait donc fonctionner avec une base bien plus basse : c'est le levier de sobriété des week-ends.")
+
+    st.header("Scène 4 · Jours ouvrés, week-ends et congés")
+    par_type = d.groupby("type_jour").agg(jours=("kwh", "size"), kwh_jour=("kwh", "mean"), cnc=("cnc", "mean"), kwh_total=("kwh", "sum"))
+    par_type["Part de la conso. (%)"] = par_type["kwh_total"] / par_type["kwh_total"].sum() * 100
+    fig2 = px.bar(par_type.reset_index(), x="type_jour", y="kwh_jour", color="type_jour", text_auto=".0f",
+                  labels={"kwh_jour": "kWh par jour", "type_jour": ""}, title="Consommation moyenne par type de jour")
+    fig2.update_layout(showlegend=False, height=380)
+    st.plotly_chart(fig2, **STRETCH)
+    st.markdown(f"Même en congé, le site consomme **{fmt(R['mesure_arret'])} kWh/jour** : climatisation de la salle blanche, fuites d'air comprimé "
+                f"et équipements en veille.")
+
+    st.header("Scène 5 · Où va l'énergie ? (Pareto)")
+    fig3 = go.Figure()
+    par = R["pareto"]
+    fig3.add_bar(x=par.index, y=par["kWh/an"], name="kWh/an", marker_color="#1b6ca8")
+    fig3.add_scatter(x=par.index, y=par["% cumulé"], name="% cumulé", yaxis="y2", mode="lines+markers", line=dict(color="#e71d36"))
+    fig3.update_layout(yaxis2=dict(overlaying="y", side="right", range=[0, 105]), height=380, title="Pareto des usages")
+    st.plotly_chart(fig3, **STRETCH)
+    st.latex(r"E_{\text{usage}}=\beta_{\text{usage}}\times\sum_j x_{j}\times\frac{365}{n}")
+
+    ressources([
+        ("ISO 50001 — systèmes de management de l'énergie", "https://www.iso.org/iso-50001-energy-management.html"),
+        ("ANME — Agence nationale pour la maîtrise de l'énergie", "https://www.anme.tn"),
+        ("STEG — tarifs moyenne tension", "https://www.steg.com.tn/fr/page/tarifs-moyenne-tension"),
+        ("Facteur d'émission du réseau tunisien (U4E, 2019)", "https://united4efficiency.org/wp-content/uploads/2019/11/FR_TUN_U4E-Country-Saving-Assessment_Cooling.pdf"),
+        ("Protocole IPMVP (mesure et vérification) — EVO", ""),
+        ("ASHRAE Guideline 14 (calibrage des modèles énergétiques)", ""),
+    ])
+
+
+def page_donnees(d, R):
+    hero("Données de l'entreprise", "Dictionnaire des variables, indicateurs agrégés fournis et contrôle de cohérence avec le fichier Excel.")
+    st.subheader("Variables (colonnes)")
+    st.dataframe(DICTIONNAIRE, **STRETCH, hide_index=True)
+    st.subheader("Indicateurs agrégés — calculés hors jours d'arrêt annuel")
+    st.dataframe(AGREGATS.style.format({"Valeur": "{:,.1f}"}), **STRETCH, hide_index=True)
+    if d is None:
+        st.warning("Fichier Excel non chargé : le contrôle de cohérence n'est pas disponible.")
+        return
+    st.subheader("Contrôle de cohérence : fichier Excel vs indicateurs de l'entreprise")
+    hors = d[d["arret"] == 0]
+    d_post_limite = d["Date"].min() + pd.Timedelta(days=365)
+    calcul = [
+        len(d), int(d["arret"].sum()), hors["cnc"].sum(), d["autoclave"].sum(), d["kwh"].sum(), d["cout"].sum(),
+        d.loc[d["Date"] <= d_post_limite - pd.Timedelta(days=1), "fuites"].mean(), d.loc[d["Date"] > d_post_limite - pd.Timedelta(days=1), "fuites"].mean(),
+        hors["rebut"].mean() if "rebut" in hors else np.nan, int(d["anom"].sum()),
+    ]
+    ctrl = AGREGATS[["Indicateur", "Valeur"]].copy()
+    ctrl["Fichier Excel"] = calcul
+    ctrl["Écart (%)"] = (ctrl["Fichier Excel"] - ctrl["Valeur"]) / ctrl["Valeur"] * 100
+    tol = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 1.0, 1.0, 1.0, 0.1]
+    ctrl["Statut"] = ["OK" if abs(e) <= t else "À vérifier" for e, t in zip(ctrl["Écart (%)"], tol)]
+    st.dataframe(ctrl.style.format({"Valeur": "{:,.1f}", "Fichier Excel": "{:,.1f}", "Écart (%)": "{:+.2f}"}), **STRETCH, hide_index=True)
+    conso_hors = hors["kwh"].sum()
+    if abs(d["kwh"].sum() - 6276711) < abs(conso_hors - 6276711):
+        st.warning("Le total de 6 276 711 kWh correspond à la somme des jours **arrêts inclus** : l'intitulé « hors arrêt » est à confirmer avec l'entreprise.")
+    ouv = d[d["type_jour"] == "Ouvré"]
+    st.caption(f"Jours ouvrés hors congés et week-ends : {len(ouv)} jours, {fmt(ouv['kwh'].sum())} kWh "
+               f"({ouv['kwh'].sum() / d['kwh'].sum() * 100:.1f} % de la consommation totale).")
+    with st.expander("Aperçu des données journalières"):
+        st.dataframe(d.drop(columns=["dow", "mois"], errors="ignore").head(60), **STRETCH)
+        st.download_button("Télécharger les données nettoyées (CSV)", d.to_csv(index=False).encode("utf-8"), "aerotun_nettoye.csv", "text/csv")
+
+
+PARAM_TABLE = pd.DataFrame(
+    [
+        ["Taux d'actualisation", "10 %", "Taux directeur BCT 7 % + prime de risque (test 7-14 %)", "Hypothèse"],
+        ["Hausse du prix de l'électricité", "3 %/an", "Tarif MT inchangé depuis 10/2022 (STEG) ; testé 0-6 %", "Hypothèse encadrée"],
+        ["Inflation de la maintenance", "5,5 %/an", "BCT, inflation de septembre 2026", "Sourcé"],
+        ["Facteur d'émission du réseau", "0,58 kgCO₂/kWh", "U4E 2019 (AIE/IGES) ; 0,48 avec le mix 2025 ; à remplacer par le facteur ANME", "Sourcé (secondaire)"],
+        ["Prix du carbone", "50 TND/tCO₂", "Choix de l'étudiante (illustratif)", "Hypothèse"],
+        ["Taux de change", "3,0 TND/USD", "BCT, 08/10/2026", "Sourcé"],
+        ["Productible PV", "1 650 kWh/kWc/an", "Guide ANME d'autoproduction", "Sourcé"],
+        ["CAPEX PV", "2 500 TND/kWc", "Marché tunisien 2 000-2 900 ; Safran Soliman 2 765", "Sourcé (secondaire)"],
+        ["Maintenance PV", "62 TND/kWc/an", "GIZ 2013", "Sourcé (ancien)"],
+        ["Tarif d'achat du surplus", "0,12 TND/kWh", "STEG, barème autoproduction", "Sourcé"],
+        ["Plafond de vente du surplus", "30 % de la production", "Guide ENR Tunisie 2019", "Sourcé"],
+        ["Tarif moyen implicite", "calculé", "Coût total / consommation totale des données", "Calculé"],
+        ["CAPEX / OPEX sobriété", "5 000 TND / 0", "Aucune source publique : devis à obtenir", "Hypothèse"],
+        ["CAPEX / OPEX efficacité", "85 000 TND / 2 000", "Aucune source publique : devis à obtenir", "Hypothèse"],
+        ["Ancre autoclave", "-16 %", "Projet UE OPTO-CLAVE", "International"],
+        ["Ancre usinage CNC", "-12 %", "Littérature CNC (source non académique)", "International"],
+        ["Transférabilité du benchmark", "⅓ / ⅔ / 1", "Choix de l'étudiante", "Hypothèse"],
+        ["Subventions FTE", "20 % PV (plafond 200 000) ; jusqu'à 50 % efficacité", "ANME (guide ER 2024 ; déclaration 2026)", "Sourcé"],
+    ],
+    columns=["Paramètre", "Valeur par défaut", "Source", "Statut"],
+)
+
+
+def page_parametres(d, R):
+    hero("Paramètres", "Toutes les hypothèses, leur source et leur statut. Modifie-les ci-dessous : le dashboard se recalcule.")
+    st.dataframe(PARAM_TABLE, **STRETCH, hide_index=True)
+    st.subheader("Modifier les paramètres")
+    P = st.session_state["P"]
+    with st.form("form_params"):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown("**Finance**")
+            taux = st.number_input("Taux d'actualisation", 0.0, 0.5, float(P["taux"]), 0.005, format="%.3f")
+            g = st.number_input("Hausse du prix de l'électricité", 0.0, 0.3, float(P["g"]), 0.005, format="%.3f")
+            infl = st.number_input("Inflation de la maintenance", 0.0, 0.3, float(P["infl"]), 0.005, format="%.3f")
+            fe = st.number_input("Facteur d'émission (kgCO₂/kWh)", 0.1, 1.2, float(P["fe"]), 0.01)
+            prix_c = st.number_input("Prix du carbone (TND/tCO₂)", 0.0, 1000.0, float(P["prix_carbone"]), 5.0)
+        with c2:
+            st.markdown("**Photovoltaïque**")
+            kwc = st.number_input("Puissance (kWc)", 10.0, 2000.0, float(P["pv_kwc"]), 10.0)
+            prod = st.number_input("Productible (kWh/kWc/an)", 1000.0, 2200.0, float(P["pv_prod"]), 10.0)
+            capex_kwc = st.number_input("CAPEX (TND/kWc)", 1000.0, 5000.0, float(P["pv_capex_kwc"]), 50.0)
+            opex_kwc = st.number_input("Maintenance (TND/kWc/an)", 0.0, 200.0, float(P["pv_opex_kwc"]), 1.0)
+            t_vente = st.number_input("Tarif de vente du surplus (TND/kWh)", 0.0, 0.5, float(P["tarif_vente"]), 0.01)
+        with c3:
+            st.markdown("**Sobriété et efficacité**")
+            capex_sob = st.number_input("CAPEX sobriété (TND)", 0.0, 500000.0, float(P["capex_sob"]), 1000.0)
+            opex_sob = st.number_input("OPEX sobriété (TND/an)", 0.0, 100000.0, float(P["opex_sob"]), 500.0)
+            capex_eff = st.number_input("CAPEX efficacité (TND)", 0.0, 2000000.0, float(P["capex_eff"]), 5000.0)
+            opex_eff = st.number_input("OPEX efficacité (TND/an)", 0.0, 200000.0, float(P["opex_eff"]), 500.0)
+            part_veille = st.number_input("Part de veille dans le talon", 0.0, 1.0, float(P["part_veille"]), 0.01)
+        ok = st.form_submit_button("Appliquer les paramètres", type="primary")
+    if ok:
+        nouveau = dict(P)
+        nouveau.update(taux=taux, g=g, infl=infl, fe=fe, prix_carbone=prix_c, pv_kwc=kwc, pv_prod=prod, pv_capex_kwc=capex_kwc,
+                       pv_opex_kwc=opex_kwc, tarif_vente=t_vente, capex_sob=capex_sob, opex_sob=opex_sob, capex_eff=capex_eff,
+                       opex_eff=opex_eff, part_veille=part_veille)
+        st.session_state["P"] = nouveau
+        st.success("Paramètres appliqués. Ouvre le Dashboard pour voir les résultats.")
+    if st.button("Revenir aux valeurs par défaut"):
+        st.session_state["P"] = dict(P_DEFAUT)
+        st.rerun()
+
+
+BENCH = pd.DataFrame(
+    [
+        ["Aéronautique", "OPTO-CLAVE (projet UE)", "Autoclave", "Optimisation du cycle de cuisson d'un panneau composite", "-16 % d'énergie ; -12 % de durée", 16.0, "Élevée (un cas)"],
+        ["Aéronautique", "GKN Aerospace / US Air Force", "Usinage CNC", "Outils, lubrification, programmation, paramètres de coupe", "jusqu'à -73 % (cellule)", 73.0, "Moyenne (borne très haute)"],
+        ["Aéronautique", "Politecnico di Milano", "Usinage CNC", "Mise en veille par composants", "gains significatifs (non chiffrés)", np.nan, "Moyenne"],
+        ["Aéronautique", "Fabricant aéronautique (Kaeser)", "Air comprimé", "Régulation et dimensionnement des compresseurs", "-7 % de puissance spécifique", 7.0, "Moyenne"],
+        ["Aéronautique", "Safran (sites européens)", "Sobriété", "Plan de sobriété du groupe", "-10 % d'énergie (2024 vs 2019)", 10.0, "Moyenne"],
+        ["Aéronautique", "Plymouth « cool-clave »", "Autoclave", "Pressurisation à l'air froid", "≈ -35 % (estimation)", 35.0, "Faible"],
+        ["Industrie générale", "General Dynamics (munitions)", "Sobriété", "Arrêts le week-end, consignes de refroidissement", "+11,9 % de performance (3 ans)", 11.9, "Moyenne"],
+        ["Industrie générale", "Volvo CE", "Sobriété", "Habitudes opérateurs, arrêt des machines à vide", "-14 % d'électricité totale", 14.0, "Moyenne"],
+        ["Industrie générale", "Cummins", "Sobriété", "Management de l'énergie, changements à faible coût", "+12,6 % de performance", 12.6, "Moyenne"],
+        ["Industrie générale", "Graham Packaging", "Sobriété", "Arrêt automatique de charges à vide", "-3 % d'électricité totale", 3.0, "Moyenne"],
+        ["Industrie générale", "Johnson Controls", "Air comprimé", "Gestion des fuites, suivi de pression", "-39 % d'électricité d'air comprimé", 39.0, "Moyenne"],
+        ["Industrie générale", "Programme DOE ISO 50001 / SEP", "Efficacité", "Diagnostic, procédés, modernisation", "5,6 % à 30,6 % sur 3 ans", 30.6, "Moyenne"],
+        ["Tunisie", "ANME — audit énergétique obligatoire", "Industrie (grands consommateurs)", "Audit et cogénération (thermique inclus)", "-30 % de facture ; -35 % d'énergie primaire", 30.0, "Moyenne (presse)"],
+        ["Tunisie", "ANME — cimenterie (récupération de chaleur)", "Électricité", "Récupération de chaleur", "-30 % d'électricité ; retour < 2 ans", 30.0, "Moyenne (presse)"],
+        ["Tunisie", "ANME — contrats-programmes", "Industrie", "Investissements d'efficacité", "retour ≈ 2 ans ; tep économisée ≈ 152 DT", np.nan, "Moyenne (ancien)"],
+        ["Tunisie", "Safran Soliman", "Photovoltaïque", "PV 974,7 kWc ; couverture ≈ 16,8 %", "retour annoncé 6-7 ans", np.nan, "Moyenne (fiche non auditée)"],
+    ],
+    columns=["Domaine", "Entreprise / source", "Cible", "Levier", "Résultat publié", "Gain (%)", "Fiabilité"],
+)
+
+
+def page_benchmarking(d, R):
+    hero("Benchmarking", "Les modèles d'entreprises utilisés pour calibrer les gisements et contrôler les résultats.")
+    st.markdown("Les gains machine par machine (autoclave, CNC) viennent de cas **aéronautiques internationaux**, faute d'équivalent tunisien publié. "
+                "Les références **tunisiennes** (ANME, STEG, GIZ, Safran Soliman) servent aux coûts, tarifs, subventions et contrôles de plausibilité. "
+                "Les résultats ne sont pas transférables tels quels : on applique un facteur de transférabilité (⅓, ⅔, 1).")
+    domaines = st.multiselect("Domaines", sorted(BENCH["Domaine"].unique()), default=sorted(BENCH["Domaine"].unique()))
+    b = BENCH[BENCH["Domaine"].isin(domaines)]
+    st.dataframe(b.drop(columns=["Gain (%)"]), **STRETCH, hide_index=True)
+    bb = b.dropna(subset=["Gain (%)"])
+    if not bb.empty:
+        fig = px.bar(bb, x="Gain (%)", y="Entreprise / source", color="Domaine", orientation="h", text="Gain (%)",
+                     title="Gains publiés (ordre de grandeur, périmètres différents)")
+        fig.update_layout(height=520, yaxis=dict(autorange="reversed"))
+        st.plotly_chart(fig, **STRETCH)
+    if R is not None:
+        st.subheader("Safran Soliman vs AEROTUN (photovoltaïque)")
+        P = st.session_state["P"]
+        saf = dict(kwc=974.7, prod=1_500_000.0, capex=2_695_000.0, gain=410_000.0, conso=8_935_000.0)
+        sp = R["specs"]["Central"][2]
+        res = R["res"]["Central"]["Photovoltaïque"]
+        prod_a = sp["kwh"] + sp["surplus"]
+        tab = pd.DataFrame({
+            "Safran Soliman (fiche)": [saf["kwc"], saf["prod"], saf["prod"] / saf["kwc"], saf["capex"] / saf["kwc"],
+                                       saf["prod"] / saf["conso"] * 100, saf["gain"] / saf["prod"], saf["capex"] / saf["gain"]],
+            "AEROTUN (paramètres actuels)": [P["pv_kwc"], prod_a, P["pv_prod"], sp["capex"] / P["pv_kwc"],
+                                             prod_a / R["conso_an"] * 100, res["Économie nette an 1 (TND)"] / prod_a, res["Payback simple (ans)"]],
+        }, index=["Puissance (kWc)", "Production (kWh/an)", "kWh/kWc", "CAPEX (TND/kWc)", "Couverture de la conso. (%)",
+                  "Gain (TND/kWh produit)", "Payback simple (ans)"])
+        st.dataframe(tab.style.format("{:,.2f}"), **STRETCH)
+        st.caption("Chiffres Safran : fiche projet reprise dans le document fourni (non auditée). Safran consomme environ "
+                   f"{saf['conso'] / R['conso_an']:.1f} fois plus qu'AEROTUN.")
+
+
+def page_dashboard(d, R):
+    hero("Dashboard", "Les trois piliers à suivre : les maths, les données de l'entreprise, les ressources — et le choix final.")
+    P = st.session_state["P"]
+    c1, c2 = st.columns([2, 1])
+    scenario = c1.radio("Scénario de gisement", ["Prudent", "Central", "Ambitieux"], index=1, horizontal=True)
+    fte = c2.toggle("Avec subventions FTE (borne haute)", value=P["fte"])
+    if fte != P["fte"]:
+        st.session_state["P"] = dict(P, fte=fte)
+        st.rerun()
+    res = R["res"][scenario]
+    specs = R["specs"][scenario]
+    sav = R["savings"].loc[scenario]
+    tarif = R["tarif"]
+
+    t_sob, t_eff, t_pv, t_cmp = st.tabs(["🟢 Sobriété", "🔴 Efficacité", "🟠 Photovoltaïque", "⚖️ Comparaison et choix"])
+
+    def kpis(nom):
+        r = res[nom]
+        a, b, c, e = st.columns(4)
+        a.metric("Économie (kWh/an)", fmt(r["Économie (kWh/an, an 1)"]))
+        b.metric("Économie 1re année (TND)", fmt(r["Économie nette an 1 (TND)"]))
+        c.metric("VAN (TND)", fmt(r["VAN (TND)"]))
+        e.metric("TRI", fmt(r["TRI (%)"], 0, " %"))
+        a, b, c, e = st.columns(4)
+        a.metric("Payback actualisé", fmt(r["Payback actualisé (ans)"], 1, " ans"))
+        b.metric("VAN/I", fmt(r["VAN/I"], 2))
+        c.metric("CO₂ évité (t/an, an 1)", fmt(r["CO2 évité an 1 (t)"], 0))
+        e.metric("Coût d'abattement (TND/tCO₂)", fmt(r["Coût d'abattement (TND/tCO2)"], 0))
+
+    # ---------------- Sobriété
+    with t_sob:
+        st.subheader("Sobriété énergétique : supprimer l'inutile")
+        kpis("Sobriété")
+        m, dn, rs = st.tabs(["Les maths", "Les données de l'entreprise", "Les ressources"])
+        with m:
+            st.latex(r"E_{sob}=E_{\text{talon,ouvrés}}\,\tau_{veille}+|\beta_{\text{arrêt}}|\,J_{we}\,\tau_{we}+\beta_{anom}\,J_{anom}\,\tau_{anom}")
+            st.latex(r"\tau_{veille}=\tau^{bench}_{veille}\times part_{veille}\times transfert")
+            comp = R["savings"][["Veille jours ouvrés", "Week-ends en mode arrêt", "Anomalies HVAC"]]
+            fig = px.bar(comp.reset_index().melt("index"), x="index", y="value", color="variable",
+                         labels={"index": "Scénario", "value": "kWh/an", "variable": "Levier"},
+                         title="Gisement de sobriété par levier et par scénario")
+            st.plotly_chart(fig, **STRETCH)
+        with dn:
+            st.markdown(f"- Talon du modèle (Pareto) : **{fmt(R['talon_jour'])} kWh/jour** ; consommation mesurée pendant l'arrêt annuel : **{fmt(R['mesure_arret'])} kWh/jour**.")
+            st.markdown(f"- Effet de l'arrêt annuel (M6) : **{R['coef_arret']:+,.0f} kWh/jour** (p = {R['p_arret']:.3f}) ; week-end : {R['coef_we']:+.0f} kWh/j (p = {R['p_we']:.2f}).")
+            st.markdown(f"- Anomalies de climatisation : {R['jours_anom']:.1f} jours/an, surconsommation {R['coef_anom']:+,.0f} kWh/jour (p = {R['p_anom']:.3f}) → "
+                        f"{'retenue' if R['anom_ok'] else 'non retenue (non significative)'}.")
+            st.markdown(f"- Jours par an : {R['jours_ouvres']:.0f} ouvrés, {R['jours_we']:.0f} week-ends hors arrêt.")
+        with rs:
+            ressources([("ANME — audit énergétique", "http://www.anme.tn/fr/project/energy-audit-programme"),
+                        ("La Presse — économies d'énergie dans l'industrie (18/10/2026)", "https://www.lapresse.tn/2026/10/18/industrie-tunisienne-les-economies-denergie-un-levier-de-competitivite-encore-sous-exploite-2/"),
+                        ("Volvo CE, General Dynamics, Cummins, Graham Packaging : voir Benchmarking", "")])
+
+    # ---------------- Efficacité
+    with t_eff:
+        st.subheader("Efficacité énergétique : améliorer les équipements")
+        kpis("Efficacité")
+        m, dn, rs = st.tabs(["Les maths", "Les données de l'entreprise", "Les ressources"])
+        with m:
+            st.latex(r"E_{eff}=\beta_{fuites}\sum_j(F_j-F_{cible})^{+}\tfrac{365}{n}+E_{autoclave}\,g_{auto}+E_{CNC}\,g_{cnc}")
+            comp = R["savings"][["Fuites résiduelles", "Autoclave", "Usinage CNC"]]
+            fig = px.bar(comp.reset_index().melt("index"), x="index", y="value", color="variable",
+                         labels={"index": "Scénario", "value": "kWh/an", "variable": "Levier"},
+                         title="Gisement d'efficacité par levier et par scénario")
+            st.plotly_chart(fig, **STRETCH)
+        with dn:
+            par = R["pareto"]
+            fig = go.Figure()
+            fig.add_bar(x=par.index, y=par["kWh/an"], marker_color="#1b6ca8", name="kWh/an")
+            fig.add_scatter(x=par.index, y=par["% cumulé"], yaxis="y2", name="% cumulé", line=dict(color="#e71d36"))
+            fig.update_layout(yaxis2=dict(overlaying="y", side="right", range=[0, 105]), title="Pareto des usages (kWh/an)", height=360)
+            st.plotly_chart(fig, **STRETCH)
+            st.markdown(f"Les fuites d'air comprimé ont déjà été réduites (campagne de réparation) : seul le potentiel **résiduel** de la période de suivi est valorisé "
+                        f"(coefficient : {R['c_fuites']:+.1f} kWh/jour par point de fuite).")
+        with rs:
+            ressources([("Projet UE OPTO-CLAVE (CORDIS)", "https://cordis.europa.eu/project/id/323520/reporting"),
+                        ("GKN Aerospace — Modern Machine Shop", "https://www.mmsonline.com/articles/savings-from-sustainability"),
+                        ("ANME — cahier des charges de l'audit énergétique industriel", "https://www.anme.tn/sites/default/files/2025-01/cahier_des_charges_audit_secteur_industriel_2011-07-07.pdf")])
+
+    # ---------------- Photovoltaïque
+    with t_pv:
+        st.subheader("Photovoltaïque : produire et autoconsommer")
+        kpis("Photovoltaïque")
+        m, dn, rs = st.tabs(["Les maths", "Les données de l'entreprise", "Les ressources"])
+        sp_pv = specs[2]
+
+        with m:
+            st.latex(r"\mathrm{Prod}_{PV}=P_{kWc}\times \mathrm{Prod}_{saison}")
+            st.latex(r"\tau_{auto}=\frac{\sum_j \min(\mathrm{Prod}_j,\mathrm{Res}_{HP,j})}{\sum_j \mathrm{Prod}_j}")
+            st.latex(r"LCOE=\frac{I+\sum_t (OPEX_t+Remp_t)/(1+a)^t}{\sum_t E_t/(1+a)^t}")
+
+            lcoe = res["Photovoltaïque"]["LCOE / coût de l'énergie (TND/kWh)"]
+            st.markdown(f"LCOE = **{lcoe:.3f} TND/kWh** contre un tarif réseau moyen de **{tarif:.3f} TND/kWh**.")
+
+            # Balayage de la puissance installée
+            tailles = [50, 100, 150, 250, 400, 600]
+            fr = 1 - sav.sum() / R["conso_an"]
+            lignes = []
+            for k in tailles:
+                tx, au, su, _ = autoconso_pv(d, P, k, fr)
+                su = min(su, P["pv_surplus_max"] * (au + su))
+                capex = k * P["pv_capex_kwc"]
+                s_ = spec("Photovoltaïque", au, P, su, capex=capex, opex=k * P["pv_opex_kwc"],
+                          remp={int(P["pv_remp_an"]): P["pv_remp_part"] * capex})
+                r = evaluer(s_, P, tarif)
+                lignes.append({"kWc": k, "Autoconsommation (%)": tx * 100, "VAN (TND)": r["VAN (TND)"], "TRI (%)": r["TRI (%)"]})
+            sweep = pd.DataFrame(lignes)
+            fig = px.line(sweep, x="kWc", y="VAN (TND)", markers=True, title="VAN selon la puissance installée (CAPEX/kWc constant)")
+            st.plotly_chart(fig, **STRETCH)
+            st.dataframe(sweep.round(1), hide_index=True, **STRETCH)
+
+        with dn:
+            fr_pv = R["taux_pv"][scenario]
+            st.markdown(f"- Production : **{fmt(P['pv_kwc'] * P['pv_prod'])} kWh/an** = {P['pv_kwc'] * P['pv_prod'] / R['conso_an'] * 100:.1f} % de la consommation ; "
+                        f"facteur de charge {P['pv_prod'] / 8760 * 100:.1f} %.")
+            st.markdown(f"- Autoconsommation estimée : **{fr_pv * 100:.1f} %** (borne haute : données journalières, sans saisonnalité) ; "
+                        f"surplus vendu : {fmt(sp_pv['surplus'])} kWh/an (plafond {P['pv_surplus_max'] * 100:.0f} %).")
+            _, _, _, auto_j = autoconso_pv(d, P, P["pv_kwc"])
+            dm = pd.DataFrame({"mois": d["mois"], "Production": P["pv_kwc"] * P["pv_prod"] / 365.0, "Autoconsommée": auto_j,
+                               "Conso. diurne": d["kwh"] * d["hp"] / 100.0}).groupby("mois").sum()
+            fig = go.Figure()
+            fig.add_bar(x=dm.index, y=dm["Conso. diurne"], name="Conso. diurne (kWh)", marker_color="#b0c4de")
+            fig.add_bar(x=dm.index, y=dm["Production"], name="Production PV (kWh)", marker_color="#ff9f1c")
+            fig.update_layout(barmode="group", title="Production PV vs consommation diurne (heures pleines)", height=380)
+            st.plotly_chart(fig, **STRETCH)
+
+        with rs:
+            ressources([("STEG — tarifs moyenne tension", "https://www.steg.com.tn/fr/page/tarifs-moyenne-tension"),
+                        ("STEG — tarifs d'autoproduction (surplus)", "https://www.steg.com.tn/fr/page/tarifs-de-l%E2%80%99%C3%A9lectricit%C3%A9-produite-%C3%A0-partir-d%E2%80%99autres-types-d%E2%80%99autoproduction"),
+                        ("Guide des projets ENR en Tunisie (2019)", "https://www.tunisieindustrie.gov.tn/upload/ENR/Guide_detaille_ENR_tunisie_mai2019.pdf"),
+                        ("Guide ANME d'autoproduction PV", "https://www.anme.tn/sites/default/files/2025-02/Guide%20pour%20l%E2%80%99%C3%A9laboration%20des%20%C3%A9tudes%20de%20faisabilit%C3%A9%20et%20l%E2%80%99assistance%20technique%20des%20projets%20d%E2%80%99autoproduction%20d%E2%80%99%C3%A9lectricit%C3%A9%20par%20l%E2%80%99%C3%A9nergie%20solaire%20photovolta%C3%AFque.pdf"),
+                        ("Marché photovoltaïque en Tunisie (GIZ, 2013)", "https://energypedia.info/images/6/64/March%C3%A9PhotovoltaiqueTunisie_GIZ_082013.pdf")])
+
+    # ---------------- Comparaison
+    with t_cmp:
+        st.subheader("Comparaison des trois piliers et choix")
+        table = pd.DataFrame({n: {k: v for k, v in res[n].items() if k not in ("flux", "Projet")} for n in PROJETS}).T
+        st.dataframe(table.style.format("{:,.2f}"), **STRETCH)
+        a, b, c = st.columns(3)
+        figv = px.bar(table.reset_index(), x="index", y="VAN (TND)", color="index", color_discrete_map=COULEURS, text_auto=",.0f",
+                      labels={"index": ""}, title="VAN (durée de vie propre à chaque projet)")
+        figv.update_layout(showlegend=False, height=340)
+        a.plotly_chart(figv, **STRETCH)
+        figi = px.bar(table.reset_index(), x="index", y="VAN/I", color="index", color_discrete_map=COULEURS, text_auto=".2f",
+                      labels={"index": ""}, title="VAN/I (taux d'enrichissement)")
+        figi.update_layout(showlegend=False, height=340)
+        b.plotly_chart(figi, **STRETCH)
+        figt = px.bar(table.reset_index(), x="index", y="AE (TND/an)", color="index", color_discrete_map=COULEURS, text_auto=",.0f",
+                      labels={"index": ""}, title="Annuité équivalente (TND/an)")
+        figt.update_layout(showlegend=False, height=340)
+        c.plotly_chart(figt, **STRETCH)
+        st.caption("La VAN absolue dépend du capital engagé : le PV immobilise un CAPEX élevé, l'efficacité un CAPEX faible. "
+                   "Les projets ne sont pas exclusifs ; compare VAN/I, TRI et AE.")
+
+        fig = go.Figure()
+        for nom in PROJETS:
+            fl = res[nom]["flux"]
+            fig.add_scatter(x=list(range(len(fl))), y=np.cumsum([f / (1 + P["taux"]) ** t for t, f in enumerate(fl)]),
+                            mode="lines+markers", name=nom, line=dict(color=COULEURS[nom]))
+        fig.add_hline(y=0, line_color="black")
+        fig.update_layout(title="Flux de trésorerie cumulés actualisés (TND)", xaxis_title="Année", height=380)
+        st.plotly_chart(fig, **STRETCH)
+
+        st.markdown("#### Choix multicritère (programmation par objectif)")
+        w1, w2, w3 = st.columns(3)
+        w_e = w1.slider("Poids énergie", 0.0, 1.0, 1 / 3, 0.05)
+        w_a = w2.slider("Poids économie (AE)", 0.0, 1.0, 1 / 3, 0.05)
+        w_c = w3.slider("Poids environnement (CO₂)", 0.0, 1.0, 1 / 3, 0.05)
+        s = w_e + w_a + w_c
+        if s == 0:
+            st.warning("Au moins un poids doit être non nul.")
+        else:
+            crit = table[["Économie (kWh/an, an 1)", "AE (TND/an)", "CO2 évité moy. (t/an)"]].copy()
+            crit.columns = ["Énergie", "Économie", "Environnement"]
+            ecart = ((crit.max() - crit) / (crit.max() - crit.min()).replace(0, np.nan)).fillna(0.0)
+            score = (ecart["Énergie"] * w_e + ecart["Économie"] * w_a + ecart["Environnement"] * w_c) / s
+            st.latex(r"S_i=\sum_k w_k\,\frac{x_k^{\max}-x_{i,k}}{x_k^{\max}-x_k^{\min}}\quad(\text{minimiser})")
+            st.bar_chart(score.rename("Score (plus bas = meilleur)"))
+            st.success(f"Projet retenu avec ces poids : **{score.idxmin()}**")
+            dom = [i for i in PROJETS if any(j != i and (crit.loc[j] >= crit.loc[i]).all() and (crit.loc[j] > crit.loc[i]).any() for j in PROJETS)]
+            st.caption("Projets dominés au sens de Pareto : " + (", ".join(dom) if dom else "aucun (les trois sont Pareto-optimaux)"))
+
+        st.markdown("#### Sensibilité de la VAN")
+        proj = st.selectbox("Projet", PROJETS, index=2)
+        sp_sel = specs[PROJETS.index(proj)]
+        taux_grid = [0.07, 0.10, 0.12, 0.14]
+        g_grid = [0.0, 0.03, 0.06]
+        mat = pd.DataFrame({f"g = {g:.0%}": [evaluer(sp_sel, P, tarif, a=a_, g=g)["VAN (TND)"] for a_ in taux_grid] for g in g_grid},
+                           index=[f"a = {a_:.0%}" for a_ in taux_grid])
+        st.plotly_chart(px.imshow(mat, text_auto=",.0f", color_continuous_scale="RdYlGn", aspect="auto",
+                                  title=f"VAN de {proj} : taux d'actualisation × hausse du prix de l'électricité"), **STRETCH)
+        ressources([("IRENA — Renewable Cost Database", ""), ("BCT — taux directeur et inflation", "https://fr.allafrica.com/stories/202610080466.html"),
+                    ("Support de cours : Choix d'investissements pour les systèmes énergétiques", "")])
+
+
+# ----------------------------------------------------------------------------
+# NAVIGATION
+# ----------------------------------------------------------------------------
+PAGES = ["Overview", "Chapitre I", "Données de l'entreprise", "Paramètres", "Benchmarking", "Dashboard"]
+ICONES = {"Overview": "🏠", "Chapitre I": "📖", "Données de l'entreprise": "🗂️", "Paramètres": "⚙️", "Benchmarking": "🏭", "Dashboard": "📊"}
+
+if "page" not in st.session_state:
+    st.session_state["page"] = "Overview"
+if "P" not in st.session_state:
+    st.session_state["P"] = dict(P_DEFAUT)
+
+st.sidebar.title("⚡ AEROTUN")
+for p in PAGES:
+    if st.sidebar.button(f"{ICONES[p]}  {p}", **STRETCH,
+                         type="primary" if st.session_state["page"] == p else "secondary", key=f"btn_{p}"):
+        st.session_state["page"] = p
+        st.rerun()
+st.sidebar.divider()
+
+donnees, source = charger_donnees()
+d = preparer(donnees) if donnees is not None else None
+R = analyser(d, json.dumps(st.session_state["P"], sort_keys=True)) if d is not None else None
+if source:
+    st.sidebar.caption(f"Données : {source}\n{len(d)} jours")
+
+page = st.session_state["page"]
+if d is None and page in ("Overview", "Chapitre I", "Dashboard", "Benchmarking"):
+    if page == "Benchmarking":
+        page_benchmarking(None, None)
+    elif page == "Overview":
+        page_overview(None, None)
+    else:
+        st.error("Le fichier Excel est introuvable : vérifie le chemin DATA_PATH en haut de app.py ou charge le fichier dans la barre latérale.")
+else:
+    {"Overview": page_overview, "Chapitre I": page_chapitre1, "Données de l'entreprise": page_donnees,
+     "Paramètres": page_parametres, "Benchmarking": page_benchmarking, "Dashboard": page_dashboard}[page](d, R)
