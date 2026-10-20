@@ -39,12 +39,196 @@ st.set_page_config(page_title="AEROTUN — Transition énergétique", page_icon=
 st.markdown(
     """
     <style>
-    .hero {background: linear-gradient(120deg,#0b3d91 0%,#1b6ca8 60%,#2ec4b6 100%);
-           padding: 28px 32px; border-radius: 14px; color: white; margin-bottom: 18px;}
-    .hero h1 {margin: 0 0 6px 0; font-size: 2.0rem; color: white;}
-    .hero p {margin: 0; font-size: 1.05rem; opacity: .95;}
-    .pill {display:inline-block; padding:3px 12px; border-radius:20px; background:#e8f1fb;
-           color:#0b3d91; font-size:.82rem; margin-right:6px;}
+    /* ---------- Animations pro AEROTUN ---------- */
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(18px); }
+        to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes fadeIn {
+        from { opacity: 0; }
+        to   { opacity: 1; }
+    }
+    @keyframes slideInLeft {
+        from { opacity: 0; transform: translateX(-16px); }
+        to   { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes shimmer {
+        0%   { background-position: -200% 0; }
+        100% { background-position:  200% 0; }
+    }
+    @keyframes pulseSoft {
+        0%, 100% { box-shadow: 0 4px 20px rgba(11, 61, 145, 0.18); }
+        50%      { box-shadow: 0 6px 28px rgba(46, 196, 182, 0.28); }
+    }
+    @keyframes gradientShift {
+        0%   { background-position: 0% 50%; }
+        50%  { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+    }
+
+    /* Contenu principal : apparition fluide */
+    .main .block-container {
+        animation: fadeInUp 0.45s ease-out both;
+    }
+
+    /* Hero banner */
+    .hero {
+        background: linear-gradient(120deg, #0b3d91 0%, #1b6ca8 45%, #2ec4b6 100%);
+        background-size: 200% 200%;
+        animation: gradientShift 12s ease infinite, fadeInUp 0.55s ease-out both, pulseSoft 4s ease-in-out infinite;
+        padding: 28px 32px;
+        border-radius: 14px;
+        color: white;
+        margin-bottom: 18px;
+        position: relative;
+        overflow: hidden;
+    }
+    .hero::after {
+        content: "";
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+        background-size: 200% 100%;
+        animation: shimmer 4.5s ease-in-out infinite;
+        pointer-events: none;
+    }
+    .hero h1 {
+        margin: 0 0 6px 0;
+        font-size: 2.0rem;
+        color: white;
+        position: relative;
+        z-index: 1;
+        animation: slideInLeft 0.5s ease-out 0.1s both;
+    }
+    .hero p {
+        margin: 0;
+        font-size: 1.05rem;
+        opacity: .95;
+        position: relative;
+        z-index: 1;
+        animation: fadeIn 0.55s ease-out 0.25s both;
+    }
+
+    /* Pills */
+    .pill {
+        display: inline-block;
+        padding: 4px 14px;
+        border-radius: 20px;
+        background: #e8f1fb;
+        color: #0b3d91;
+        font-size: .82rem;
+        margin-right: 6px;
+        margin-bottom: 4px;
+        transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+        animation: fadeInUp 0.4s ease-out both;
+    }
+    .pill:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(11, 61, 145, 0.15);
+        background: #d6e8f8;
+    }
+
+    /* Metrics Streamlit */
+    [data-testid="stMetric"] {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 12px 16px;
+        transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+        animation: fadeInUp 0.4s ease-out both;
+    }
+    [data-testid="stMetric"]:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 8px 24px rgba(11, 61, 145, 0.12);
+        border-color: #2ec4b6;
+    }
+    [data-testid="stMetricValue"] {
+        transition: color 0.2s ease;
+    }
+    [data-testid="stMetric"]:hover [data-testid="stMetricValue"] {
+        color: #0b3d91;
+    }
+
+    /* Boutons sidebar */
+    section[data-testid="stSidebar"] .stButton > button {
+        transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+        border-radius: 10px !important;
+    }
+    section[data-testid="stSidebar"] .stButton > button:hover {
+        transform: translateX(4px);
+        box-shadow: 0 4px 14px rgba(11, 61, 145, 0.18);
+    }
+    section[data-testid="stSidebar"] .stButton > button[kind="primary"] {
+        box-shadow: 0 2px 10px rgba(11, 61, 145, 0.25);
+    }
+
+    /* Boutons généraux */
+    .stButton > button {
+        transition: all 0.2s ease;
+        border-radius: 8px !important;
+    }
+    .stButton > button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+    }
+    .stButton > button:active {
+        transform: translateY(0);
+    }
+
+    /* Tabs */
+    button[data-baseweb="tab"] {
+        transition: color 0.2s ease, border-color 0.2s ease !important;
+    }
+    button[data-baseweb="tab"]:hover {
+        color: #0b3d91 !important;
+    }
+
+    /* Dataframes / tables */
+    [data-testid="stDataFrame"], .stTable {
+        animation: fadeIn 0.45s ease-out both;
+        border-radius: 10px;
+        overflow: hidden;
+    }
+
+    /* Expanders */
+    [data-testid="stExpander"] {
+        transition: box-shadow 0.2s ease;
+        border-radius: 10px !important;
+    }
+    [data-testid="stExpander"]:hover {
+        box-shadow: 0 4px 16px rgba(11, 61, 145, 0.08);
+    }
+
+    /* Info / success / warning boxes */
+    [data-testid="stAlert"] {
+        animation: fadeInUp 0.4s ease-out both;
+        border-radius: 10px !important;
+    }
+
+    /* Plotly charts container */
+    .js-plotly-plot, [data-testid="stPlotlyChart"] {
+        animation: fadeIn 0.5s ease-out both;
+        transition: transform 0.25s ease;
+    }
+
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        animation: slideInLeft 0.4s ease-out both;
+    }
+
+    /* Radio / toggle */
+    [data-testid="stRadio"] label, [data-testid="stCheckbox"] label {
+        transition: color 0.15s ease;
+    }
+
+    /* Réduction motion pour accessibilité */
+    @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 0.01ms !important;
+        }
+    }
     </style>
     """,
     unsafe_allow_html=True,
