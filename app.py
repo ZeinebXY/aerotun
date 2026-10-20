@@ -5,6 +5,7 @@ AEROTUN — Application Streamlit : sobriété, efficacité énergétique et pho
 Lancer :   streamlit run app.py
 Installer: pip install streamlit pandas numpy plotly statsmodels scipy openpyxl
 """
+import datetime
 import io
 import json
 import os
@@ -20,10 +21,13 @@ from scipy.optimize import brentq
 # ----------------------------------------------------------------------------
 # CONFIGURATION
 # ----------------------------------------------------------------------------
-DATA_PATH = os.environ.get(
-    "AEROTUN_DATA",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "Aerotun.xlsx"),
-)
+try:
+    _DOSSIER = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _DOSSIER = "."
+_LOCAL = os.path.join(_DOSSIER, "data", "Aerotun.xlsx")
+# Priorité : variable d'environnement > data/Aerotun.xlsx (dépôt) > ancien chemin OneDrive
+DATA_PATH = os.environ.get("AEROTUN_DATA") or (_LOCAL if os.path.exists(_LOCAL) else r"C:\Users\User\OneDrive\Documents\Aerotun.xlsx")
 SHEET = "Feuil1"
 
 
@@ -62,7 +66,7 @@ RENOMMAGE = {
     "Conso. électrique (kWh)": "kwh", "Coût énergie (TND)": "cout", "Heures-machine CNC": "cnc",
     "Cycles autoclave": "autoclave", "Taux fuites air comprimé (%)": "fuites",
     "Temp. salle blanche (°C)": "temp", "Humidité salle blanche (%)": "hum",
-    "Taux rebut qualité (%)": "rebut", "Part heures pleines (%)": "hp",
+    "Taux rebut qualité (%)": "rebut", "Part heures pleines (%)": "hp", "IPE élec. (kWh/h-machine)": "ipe",
     "Anomalie climatisation": "anom", "Arrêt annuel": "arret",
 }
 JOURS_NON_OUVRES = [5, 6]
@@ -135,30 +139,50 @@ def _num(s: pd.Series) -> pd.Series:
     return pd.to_numeric(s, errors="coerce")
 
 
+def _reparer_dates(df: pd.DataFrame) -> pd.Series:
+    """Dates robustes : Excel inverse jour et mois pour les jours <= 12 ; la colonne « Mois » sert de référence."""
+    mois = pd.to_numeric(df["Mois"], errors="coerce") if "Mois" in df.columns else pd.Series(np.nan, index=df.index)
+
+    def une_date(v, m):
+        if isinstance(v, (pd.Timestamp, datetime.datetime)):
+            t = pd.Timestamp(v)
+            if pd.notna(m) and t.month != int(m) and t.day == int(m):
+                try:
+                    return pd.Timestamp(year=t.year, month=t.day, day=t.month)
+                except ValueError:
+                    return t
+            return t
+        return pd.to_datetime(str(v).strip(), dayfirst=True, errors="coerce")
+
+    return pd.to_datetime(pd.Series([une_date(v, m) for v, m in zip(df["Date"], mois)], index=df.index), errors="coerce")
+
+
 def nettoyer(brut: pd.DataFrame) -> pd.DataFrame:
     df = brut.copy()
     df.columns = [str(c).strip() for c in df.columns]
     for c in COLONNES_NUM:
         if c in df.columns:
             df[c] = _num(df[c])
+            if df[c].isna().any():                       # imputation par la médiane (protocole du notebook)
+                df[c] = df[c].fillna(df[c].median())
     for c in ["Anomalie climatisation", "Arrêt annuel"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
 
-    dt = df["Date"] if pd.api.types.is_datetime64_any_dtype(df["Date"]) else pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
-    if "Mois" in df.columns and dt.notna().any():
-        mois = pd.to_numeric(df["Mois"], errors="coerce")
-        if (dt.dt.month != mois).mean() > 0.5:      # jour et mois inversés à la lecture d'Excel
-            dt = pd.to_datetime(dict(year=dt.dt.year, month=dt.dt.day, day=dt.dt.month), errors="coerce")
-    df["Date"] = dt
-    df = df.dropna(subset=["Date"]).sort_values("Date").drop_duplicates("Date").reset_index(drop=True)
-    return df
+    df["Date"] = _reparer_dates(df)
+    df = df.dropna(subset=["Date"]).reset_index(drop=True)
+    if df["Date"].duplicated().any():                    # filet de sécurité : fichier quotidien dans l'ordre chronologique
+        df["Date"] = pd.date_range(start=df["Date"].min(), periods=len(df), freq="D")
+    return df.sort_values("Date").reset_index(drop=True)
 
 
 def preparer(df: pd.DataFrame) -> pd.DataFrame:
     d = df.rename(columns=RENOMMAGE).copy()
     requis = ["kwh", "cout", "cnc", "autoclave", "fuites", "temp", "hp", "anom", "arret"]
-    d = d.dropna(subset=[c for c in requis if c in d.columns]).reset_index(drop=True)
+    for c in requis:                                      # jamais de lignes supprimées en silence : médiane si valeur manquante
+        if c in d.columns and d[c].isna().any():
+            d[c] = d[c].fillna(d[c].median())
+    d = d.reset_index(drop=True)
     d["dow"] = d["Date"].dt.dayofweek
     d["type_jour"] = np.where(d["arret"] == 1, "Arrêt annuel", np.where(d["dow"].isin(JOURS_NON_OUVRES), "Week-end", "Ouvré"))
     d["est_weekend"] = d["dow"].isin(JOURS_NON_OUVRES).astype(int)
@@ -324,19 +348,38 @@ def analyser(d: pd.DataFrame, P_json: str):
 
     # --- Pareto des usages (modèle CNC + autoclave + fuites)
     m_par, variables = modele_pareto(d)
-    noms = {"cnc": "Usinage CNC", "autoclave": "Autoclave", "fuites": "Fuites d'air comprimé", "Intercept": "Consommation de base (talon)"}
-    contrib = {noms["Intercept"]: m_par.params["Intercept"] * n}
+    noms = {"cnc": "Usinage CNC", "autoclave": "Autoclave", "fuites": "Fuites d'air comprimé (gaspillage)",
+            "Intercept": "Consommation de base (CVC, éclairage, auxiliaires)"}
+    contrib = pd.DataFrame(index=d.index)
+    contrib[noms["Intercept"]] = float(m_par.params["Intercept"])
     for v in variables:
-        contrib[noms[v]] = m_par.params[v] * d[v].sum()
-    usage = pd.Series(contrib).sort_values(ascending=False) * fact_an
+        contrib[noms[v]] = m_par.params[v] * d[v]
+    prix_j = d["cout"] / d["kwh"]
+    kwh_u = contrib.sum().sort_values(ascending=False)
+    cout_u = contrib.mul(prix_j, axis=0).sum().reindex(kwh_u.index)
+    usage = kwh_u * fact_an
     R["usage_an"] = usage
-    R["pareto"] = pd.DataFrame({"kWh/an": usage, "% kWh": usage / usage.sum() * 100,
-                                "% cumulé": usage.cumsum() / usage.sum() * 100})
+    par = pd.DataFrame({"kWh": kwh_u, "% kWh": kwh_u / kwh_u.sum() * 100, "% cumulé": kwh_u.cumsum() / kwh_u.sum() * 100,
+                        "Coût (TND)": cout_u, "% coût": cout_u / cout_u.sum() * 100, "tCO2": kwh_u * P["fe"] / 1000,
+                        "kWh/an": usage})
+    par["Zone"] = np.where(par["% cumulé"].shift(fill_value=0) < 80.0, "A (prioritaire)", "B/C")
+    R["pareto"] = par
+    R["pareto_cout"] = cout_u.sort_values(ascending=False)
+    R["mensuel_usage"] = contrib.groupby(d["mois"]).sum()[kwh_u.index]
+    R["fuites_info"] = None
+    if "fuites" in m_par.params.index and m_par.params["fuites"] > 0:
+        cf = float(m_par.params["fuites"])
+        exc = (d["fuites"] - FUITES_CIBLE["Central"]).clip(lower=0)
+        R["fuites_info"] = {"taux": float(d["fuites"].mean()), "cible": FUITES_CIBLE["Central"],
+                            "kwh": float((cf * exc).sum()), "tnd": float((cf * exc * prix_j).sum()),
+                            "t": float((cf * exc).sum() * P["fe"] / 1000)}
     R["talon_jour"] = float(m_par.params["Intercept"])
     R["c_fuites"] = float(m_par.params.get("fuites", np.nan))
 
     # --- Comparaison des modèles M1, M2, M6
-    R["comp_modeles"], objets = comparaison_modeles(d)
+    # Modèles ajustés sur la période de référence (12 premiers mois), comme dans le notebook (baseline IPMVP)
+    fin_baseline = d["Date"].min() + pd.DateOffset(months=12) - pd.Timedelta(days=1)
+    R["comp_modeles"], objets = comparaison_modeles(d[d["Date"] <= fin_baseline])
 
     # --- Effet de l'arrêt annuel (M6) et anomalies HVAC
     m6 = objets.get("M6 : M2 + week-end + arrêt annuel")
@@ -358,7 +401,7 @@ def analyser(d: pd.DataFrame, P_json: str):
     R["mesure_arret"] = float(d.loc[d["arret"] == 1, "kwh"].mean()) if (d["arret"] == 1).any() else np.nan
 
     # --- Fuites résiduelles (période de suivi = 2e année)
-    d_post = d[d["Date"] > d["Date"].min() + pd.Timedelta(days=365)]
+    d_post = d[d["Date"] > fin_baseline]
     SC = scenarios_params(P)
 
     def gain_fuites(cible):
@@ -454,6 +497,7 @@ def page_overview(d, R):
         k2.metric("Coût énergétique annuel", fmt(R["cout_an"] / 1e3, 0, " kTND"))
         k3.metric("Jours analysés", fmt(R["n"]))
         k4.metric("Émissions annuelles (scope 2)", fmt(R["conso_an"] * st.session_state["P"]["fe"] / 1000, 0, " tCO₂"))
+        st.metric("IPE moyen (kWh / heure-machine CNC)", fmt(d["kwh"].sum() / d["cnc"].sum(), 1))
     st.subheader("Comment naviguer")
     st.table(pd.DataFrame({
         "Page": ["Chapitre I", "Données de l'entreprise", "Paramètres", "Benchmarking", "Dashboard"],
@@ -479,16 +523,30 @@ def page_chapitre1(d, R):
         f"(climatisation de la salle blanche, air comprimé, éclairage, auxiliaires)."
     )
 
+    ipe_moy = d["kwh"].sum() / d["cnc"].sum()
+    k1, k2, k3 = st.columns(3)
+    k1.metric("IPE moyen (kWh / heure-machine CNC)", fmt(ipe_moy, 1))
+    k2.metric("Consommation moyenne (kWh/jour)", fmt(d["kwh"].mean()))
+    k3.metric("Émission moyenne (tCO₂/jour)", fmt(d["kwh"].mean() * P["fe"] / 1000, 2))
+    st.caption("IPE = consommation électrique totale / heures-machine CNC : plus il est bas, plus le site est performant à activité donnée.")
+
     st.header("Scène 2 · Ce que disent les corrélations")
-    variables = {"cnc": "Heures CNC", "autoclave": "Cycles autoclave", "kwh": "Conso. (kWh)", "fuites": "Fuites (%)",
-                 "temp": "Température", "hum": "Humidité", "rebut": "Rebut (%)", "hp": "Heures pleines (%)", "cout": "Coût (TND)"}
+    variables = {"cnc": "Heures-machine CNC", "autoclave": "Cycles autoclave", "kwh": "Conso. électrique (kWh)",
+                 "fuites": "Taux fuites air comprimé (%)", "temp": "Temp. salle blanche (°C)", "hum": "Humidité salle blanche (%)",
+                 "rebut": "Taux rebut qualité (%)", "hp": "Part heures pleines (%)", "cout": "Coût énergie (TND)",
+                 "ipe": "IPE élec. (kWh/h-machine)"}
     cols = [c for c in variables if c in d.columns]
-    dd = d[cols].copy()
-    dd["Émissions (tCO₂)"] = d["kwh"] * P["fe"] / 1000
-    corr = dd.rename(columns=variables).corr()
+    dd = d[cols].apply(pd.to_numeric, errors="coerce").copy()
+    dd["emis"] = d["kwh"] * P["fe"] / 1000
+    corr = dd.rename(columns={**variables, "emis": "Émission indirecte carbone (tCO₂)"}).corr()
+    constantes = [variables.get(c, c) for c in cols if dd[c].nunique(dropna=True) < 2]
+    if constantes:
+        st.warning("Variable(s) constante(s) ou vide(s) dans les données chargées : " + ", ".join(constantes) +
+                   ". Les corrélations correspondantes sont indéfinies : vérifie le fichier Excel utilisé (voir la barre latérale).")
     fig = px.imshow(corr, text_auto=".2f", color_continuous_scale="RdBu_r", zmin=-1, zmax=1, aspect="auto",
-                    title="Matrice de corrélation — production, énergie, coût et émissions")
-    fig.update_layout(height=560)
+                    title="Matrice de corrélation — production, énergie, coût et émissions carbone")
+    fig.update_xaxes(tickangle=-40)
+    fig.update_layout(height=640)
     st.plotly_chart(fig, **STRETCH)
     st.caption("Lecture : le coût et les émissions sont des dérivés de la consommation (corrélation 1) ; le taux de rebut et la température "
                "rappellent le lien entre dérives de climatisation et qualité.")
@@ -521,12 +579,42 @@ def page_chapitre1(d, R):
                 f"et équipements en veille.")
 
     st.header("Scène 5 · Où va l'énergie ? (Pareto)")
-    fig3 = go.Figure()
+    st.markdown("Le fichier ne contient qu'un compteur global : la part de chaque usage est **estimée par régression** "
+                "(kWh = base + a·CNC + b·autoclave + c·fuites), à confirmer par des sous-compteurs. "
+                "On cible les usages qui cumulent environ 80 % de la consommation (zone A).")
     par = R["pareto"]
-    fig3.add_bar(x=par.index, y=par["kWh/an"], name="kWh/an", marker_color="#1b6ca8")
-    fig3.add_scatter(x=par.index, y=par["% cumulé"], name="% cumulé", yaxis="y2", mode="lines+markers", line=dict(color="#e71d36"))
-    fig3.update_layout(yaxis2=dict(overlaying="y", side="right", range=[0, 105]), height=380, title="Pareto des usages")
-    st.plotly_chart(fig3, **STRETCH)
+    st.dataframe(par[["kWh", "% kWh", "% cumulé", "Coût (TND)", "% coût", "tCO2", "Zone"]].style.format(
+        {"kWh": "{:,.0f}", "% kWh": "{:.2f}", "% cumulé": "{:.2f}", "Coût (TND)": "{:,.0f}", "% coût": "{:.2f}", "tCO2": "{:,.1f}"}), **STRETCH)
+    zone_a = par[par["Zone"] == "A (prioritaire)"]
+    st.success(f"{len(zone_a)} usage(s) sur {len(par)} ({len(zone_a) / len(par) * 100:.0f} %) pèsent {zone_a['% kWh'].sum():.0f} % de la consommation : "
+               + ", ".join(zone_a.index))
+
+    def fig_pareto(valeurs, titre, unite):
+        cumul = valeurs.cumsum() / valeurs.sum() * 100
+        etiquettes = [n if len(n) < 26 else n[:24] + "…" for n in valeurs.index]
+        f = go.Figure()
+        f.add_bar(x=etiquettes, y=valeurs.values, name=unite, marker_color="steelblue")
+        f.add_scatter(x=etiquettes, y=cumul.values, name="% cumulé", yaxis="y2", mode="lines+markers", line=dict(color="crimson"))
+        f.add_shape(type="line", xref="paper", x0=0, x1=1, yref="y2", y0=80, y1=80, line=dict(color="grey", dash="dash"))
+        f.update_layout(title=titre, yaxis_title=unite, yaxis2=dict(overlaying="y", side="right", range=[0, 105], title="% cumulé"),
+                        height=420, legend=dict(orientation="h", y=-0.35))
+        return f
+
+    cA, cB = st.columns(2)
+    cA.plotly_chart(fig_pareto(par["kWh"], "Pareto des usages — énergie", "kWh"), **STRETCH)
+    cB.plotly_chart(fig_pareto(R["pareto_cout"], "Pareto des usages — coût", "TND"), **STRETCH)
+
+    men = R["mensuel_usage"]
+    fig_m = go.Figure()
+    for u in men.columns:
+        fig_m.add_bar(x=men.index, y=men[u], name=u)
+    fig_m.update_layout(barmode="stack", title="Cartographie des usages : consommation mensuelle par usage", yaxis_title="kWh",
+                        xaxis_title="Mois", height=440, legend=dict(orientation="h", y=-0.3))
+    st.plotly_chart(fig_m, **STRETCH)
+    fi = R["fuites_info"]
+    if fi:
+        st.markdown(f"**Gisement fuites** : taux moyen actuel {fi['taux']:.1f} %, cible (hypothèse) {fi['cible']:.1f} % → économie estimée sur la période "
+                    f"**{fmt(fi['kwh'])} kWh**, {fmt(fi['tnd'])} TND, {fi['t']:.1f} tCO₂.")
     st.latex(r"E_{\text{usage}}=\beta_{\text{usage}}\times\sum_j x_{j}\times\frac{365}{n}")
 
     ressources([
@@ -708,6 +796,9 @@ def page_dashboard(d, R):
     specs = R["specs"][scenario]
     sav = R["savings"].loc[scenario]
     tarif = R["tarif"]
+
+    st.caption(f"Scénario affiché : **{scenario}** · subventions FTE : **{'oui' if P['fte'] else 'non'}** "
+               f"(le classement des VAN dépend du scénario : en « Prudent », le PV passe devant l'efficacité).")
 
     t_sob, t_eff, t_pv, t_cmp = st.tabs(["🟢 Sobriété", "🔴 Efficacité", "🟠 Photovoltaïque", "⚖️ Comparaison et choix"])
 
@@ -914,6 +1005,19 @@ d = preparer(donnees) if donnees is not None else None
 R = analyser(d, json.dumps(st.session_state["P"], sort_keys=True)) if d is not None else None
 if source:
     st.sidebar.caption(f"Données : {source}\n{len(d)} jours")
+    alertes = []
+    for c, nom in (("kwh", "consommation"), ("cnc", "heures CNC"), ("autoclave", "cycles autoclave"), ("rebut", "rebut")):
+        if c in d.columns and d[c].nunique(dropna=True) < 2:
+            alertes.append(f"« {nom} » est constante")
+    if d["Date"].is_monotonic_increasing and d["Date"].diff().dt.days.dropna().max() > 1:
+        alertes.append("la série de dates a des trous")
+    ecart = abs(d["kwh"].sum() - 6276711.0) / 6276711.0
+    if ecart > 0.01:
+        alertes.append(f"conso totale {d['kwh'].sum():,.0f} kWh (attendu ≈ 6 276 711)".replace(",", " "))
+    if alertes:
+        st.sidebar.error("Données inattendues : " + " ; ".join(alertes) + ". Vérifie que le bon fichier Aerotun.xlsx est chargé.")
+    else:
+        st.sidebar.success("Données cohérentes avec les indicateurs de l'entreprise")
 
 page = st.session_state["page"]
 if d is None and page in ("Overview", "Chapitre I", "Dashboard", "Benchmarking"):
