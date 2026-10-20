@@ -69,8 +69,8 @@ SEUIL_P = 0.05
 # PARAMÈTRES PAR DÉFAUT (modifiables dans la page « Paramètres »)
 # ----------------------------------------------------------------------------
 P_DEFAUT = dict(
-    taux=0.10, g=0.03, infl=0.055, fe=0.58, prix_carbone=50.0, usd=3.0,
-    pv_kwc=150.0, pv_prod=1650.0, pv_capex_kwc=2500.0, pv_opex_kwc=62.0, pv_remp_an=12, pv_remp_part=0.10,
+    taux=0.08, g=0.05, infl=0.055, fe=0.58, prix_carbone=50.0, usd=3.0,
+    pv_kwc=150.0, pv_prod=1650.0, pv_capex_kwc=2500.0, pv_opex_pct=0.02, pv_remp_an=12, pv_remp_part=0.0,
     tarif_vente=0.12, pv_surplus_max=0.30, pv_deg=0.005,
     capex_sob=5000.0, opex_sob=0.0, capex_eff=85000.0, opex_eff=2000.0,
     vie_sob=5, vie_eff=10, vie_pv=20,
@@ -399,7 +399,7 @@ def analyser(d: pd.DataFrame, P_json: str):
         taux, auto, surplus, _ = autoconso_pv(d, P, P["pv_kwc"], fr)
         surplus = min(surplus, P["pv_surplus_max"] * (auto + surplus))
         capex_pv = P["pv_kwc"] * P["pv_capex_kwc"]
-        sp_pv = spec("Photovoltaïque", auto, P, surplus, capex=capex_pv, opex=P["pv_kwc"] * P["pv_opex_kwc"],
+        sp_pv = spec("Photovoltaïque", auto, P, surplus, capex=capex_pv, opex=P["pv_opex_pct"] * capex_pv,
                      remp={int(P["pv_remp_an"]): P["pv_remp_part"] * capex_pv})
         sps = [spec("Sobriété", eco_sob, P), spec("Efficacité", eco_eff, P), sp_pv]
         if P["fte"]:
@@ -586,23 +586,26 @@ def page_donnees(d, R):
 
 PARAM_TABLE = pd.DataFrame(
     [
-        ["Taux d'actualisation", "10 %", "Taux directeur BCT 7 % + prime de risque (test 7-14 %)", "Hypothèse"],
-        ["Hausse du prix de l'électricité", "3 %/an", "Tarif MT inchangé depuis 10/2022 (STEG) ; testé 0-6 %", "Hypothèse encadrée"],
-        ["Inflation de la maintenance", "5,5 %/an", "BCT, inflation de septembre 2026", "Sourcé"],
-        ["Facteur d'émission du réseau", "0,58 kgCO₂/kWh", "U4E 2019 (AIE/IGES) ; 0,48 avec le mix 2025 ; à remplacer par le facteur ANME", "Sourcé (secondaire)"],
-        ["Prix du carbone", "50 TND/tCO₂", "Choix de l'étudiante (illustratif)", "Hypothèse"],
+        ["Taux d'actualisation", "8 %", "Formation ANME/GIZ des bureaux d'études PV, module 3 (données d'entrée) ; test 7-14 %", "Sourcé"],
+        ["Hausse du prix de l'électricité", "5 %/an", "Même formation ; +15 % pour les industriels en 2022, tarif MT inchangé depuis 10/2022 (STEG) ; testé 0-6 %", "Sourcé (secondaire)"],
+        ["Inflation de la maintenance", "5,5 %/an", "BCT, inflation de septembre 2026 (la formation retient 4 % en exemple)", "Sourcé"],
+        ["Facteur d'émission du réseau", "0,58 kgCO₂/kWh", "U4E 2019 ; IFI 0,404-0,470 ; 0,48 avec le mix 2025 ; à remplacer par le facteur du cahier des charges ANME (août 2026)", "Sourcé (secondaire)"],
+        ["Prix du carbone", "50 TND/tCO₂", "Prix indicatif proposé par une professeure de l'Université de La Manouba (mars 2026) ; pas de prix officiel en Tunisie", "Sourcé (secondaire)"],
         ["Taux de change", "3,0 TND/USD", "BCT, 08/10/2026", "Sourcé"],
         ["Productible PV", "1 650 kWh/kWc/an", "Guide ANME d'autoproduction", "Sourcé"],
         ["CAPEX PV", "2 500 TND/kWc", "Marché tunisien 2 000-2 900 ; Safran Soliman 2 765", "Sourcé (secondaire)"],
-        ["Maintenance PV", "62 TND/kWc/an", "GIZ 2013", "Sourcé (ancien)"],
+        ["Maintenance PV (renouvellement inclus)", "2 % du CAPEX/an (≈ 50 TND/kWc)", "Formation ANME/GIZ, module 3 ; contrôle GIZ 2013 : 62 TND/kWc/an", "Sourcé"],
+        ["Durée de vie et dégradation PV", "20 ans ; -0,5 %/an", "Guide ANME d'autoproduction PV ; formation ANME/GIZ", "Sourcé"],
         ["Tarif d'achat du surplus", "0,12 TND/kWh", "STEG, barème autoproduction", "Sourcé"],
         ["Plafond de vente du surplus", "30 % de la production", "Guide ENR Tunisie 2019", "Sourcé"],
         ["Tarif moyen implicite", "calculé", "Coût total / consommation totale des données", "Calculé"],
-        ["CAPEX / OPEX sobriété", "5 000 TND / 0", "Aucune source publique : devis à obtenir", "Hypothèse"],
-        ["CAPEX / OPEX efficacité", "85 000 TND / 2 000", "Aucune source publique : devis à obtenir", "Hypothèse"],
+        ["CAPEX / OPEX sobriété", "5 000 TND / 0", "Aucune source tunisienne trouvée : devis d'un expert auditeur agréé ANME à obtenir", "Hypothèse"],
+        ["CAPEX / OPEX efficacité", "85 000 TND / 2 000", "Aucune source tunisienne trouvée : devis d'un expert auditeur agréé ANME à obtenir", "Hypothèse"],
+        ["Durées de vie sobriété / efficacité", "5 / 10 ans", "Choix de l'étudiante (aucune source tunisienne trouvée)", "Hypothèse"],
         ["Ancre autoclave", "-16 %", "Projet UE OPTO-CLAVE", "International"],
         ["Ancre usinage CNC", "-12 %", "Littérature CNC (source non académique)", "International"],
         ["Transférabilité du benchmark", "⅓ / ⅔ / 1", "Choix de l'étudiante", "Hypothèse"],
+        ["Part de veille, week-ends coupés, anomalies évitées, cible de fuites", "15 % ; 15/30/50 % ; 50/75/100 % ; 11/10/8 %", "Choix de l'étudiante", "Hypothèse"],
         ["Subventions FTE", "20 % PV (plafond 200 000) ; jusqu'à 50 % efficacité", "ANME (guide ER 2024 ; déclaration 2026)", "Sourcé"],
     ],
     columns=["Paramètre", "Valeur par défaut", "Source", "Statut"],
@@ -628,7 +631,7 @@ def page_parametres(d, R):
             kwc = st.number_input("Puissance (kWc)", 10.0, 2000.0, float(P["pv_kwc"]), 10.0)
             prod = st.number_input("Productible (kWh/kWc/an)", 1000.0, 2200.0, float(P["pv_prod"]), 10.0)
             capex_kwc = st.number_input("CAPEX (TND/kWc)", 1000.0, 5000.0, float(P["pv_capex_kwc"]), 50.0)
-            opex_kwc = st.number_input("Maintenance (TND/kWc/an)", 0.0, 200.0, float(P["pv_opex_kwc"]), 1.0)
+            opex_pct = st.number_input("Maintenance et renouvellement (% du CAPEX/an)", 0.0, 0.10, float(P["pv_opex_pct"]), 0.005, format="%.3f")
             t_vente = st.number_input("Tarif de vente du surplus (TND/kWh)", 0.0, 0.5, float(P["tarif_vente"]), 0.01)
         with c3:
             st.markdown("**Sobriété et efficacité**")
@@ -641,7 +644,7 @@ def page_parametres(d, R):
     if ok:
         nouveau = dict(P)
         nouveau.update(taux=taux, g=g, infl=infl, fe=fe, prix_carbone=prix_c, pv_kwc=kwc, pv_prod=prod, pv_capex_kwc=capex_kwc,
-                       pv_opex_kwc=opex_kwc, tarif_vente=t_vente, capex_sob=capex_sob, opex_sob=opex_sob, capex_eff=capex_eff,
+                       pv_opex_pct=opex_pct, tarif_vente=t_vente, capex_sob=capex_sob, opex_sob=opex_sob, capex_eff=capex_eff,
                        opex_eff=opex_eff, part_veille=part_veille)
         st.session_state["P"] = nouveau
         st.success("Paramètres appliqués. Ouvre le Dashboard pour voir les résultats.")
@@ -666,6 +669,7 @@ BENCH = pd.DataFrame(
         ["Industrie générale", "Programme DOE ISO 50001 / SEP", "Efficacité", "Diagnostic, procédés, modernisation", "5,6 % à 30,6 % sur 3 ans", 30.6, "Moyenne"],
         ["Tunisie", "ANME — audit énergétique obligatoire", "Industrie (grands consommateurs)", "Audit et cogénération (thermique inclus)", "-30 % de facture ; -35 % d'énergie primaire", 30.0, "Moyenne (presse)"],
         ["Tunisie", "ANME — cimenterie (récupération de chaleur)", "Électricité", "Récupération de chaleur", "-30 % d'électricité ; retour < 2 ans", 30.0, "Moyenne (presse)"],
+        ["Tunisie", "ANME / GIZ — diagnostic de l'air comprimé", "Air comprimé", "Cahier des charges des diagnostics (2021)", "rendement de l'air comprimé souvent limité à 10-15 %", np.nan, "Moyenne (presse)"],
         ["Tunisie", "ANME — contrats-programmes", "Industrie", "Investissements d'efficacité", "retour ≈ 2 ans ; tep économisée ≈ 152 DT", np.nan, "Moyenne (ancien)"],
         ["Tunisie", "Safran Soliman", "Photovoltaïque", "PV 974,7 kWc ; couverture ≈ 16,8 %", "retour annoncé 6-7 ans", np.nan, "Moyenne (fiche non auditée)"],
     ],
@@ -793,7 +797,8 @@ def page_dashboard(d, R):
             st.latex(r"Prod_{PV}=P_{kWc}\times Prod_{sp\acute e}\qquad \tau_{auto}=\frac{\sum_j \min(Prod_j,\,E_j^{r\acute es}\,part_{HP,j})}{\sum_j Prod_j}")
             st.latex(r"LCOE=\frac{I+\sum_t (OPEX_t+Remp_t)/(1+a)^t}{\sum_t E_t/(1+a)^t}")
             r_pv = res["Photovoltaïque"]
-            st.markdown(f"LCOE = **{r_pv['LCOE / coût de l\'énergie (TND/kWh)']:.3f} TND/kWh** contre un tarif réseau moyen de **{tarif:.3f} TND/kWh**.")
+            lcoe_pv = r_pv["LCOE / coût de l'énergie (TND/kWh)"]
+            st.markdown(f"LCOE = **{lcoe_pv:.3f} TND/kWh** contre un tarif réseau moyen de **{tarif:.3f} TND/kWh**.")
             tailles = [50, 100, 150, 250, 400, 600]
             lignes = []
             fr = 1 - (sav[["Veille jours ouvrés", "Week-ends en mode arrêt", "Anomalies HVAC", "Fuites résiduelles", "Autoclave", "Usinage CNC"]].sum()) / R["conso_an"]
@@ -801,7 +806,7 @@ def page_dashboard(d, R):
                 tx, au, su, _ = autoconso_pv(d, P, k, fr)
                 su = min(su, P["pv_surplus_max"] * (au + su))
                 capex = k * P["pv_capex_kwc"]
-                s_ = spec("Photovoltaïque", au, P, su, capex=capex, opex=k * P["pv_opex_kwc"], remp={int(P["pv_remp_an"]): P["pv_remp_part"] * capex})
+                s_ = spec("Photovoltaïque", au, P, su, capex=capex, opex=P["pv_opex_pct"] * capex, remp={int(P["pv_remp_an"]): P["pv_remp_part"] * capex})
                 r = evaluer(s_, P, tarif)
                 lignes.append({"kWc": k, "Autoconsommation (%)": tx * 100, "VAN (TND)": r["VAN (TND)"], "TRI (%)": r["TRI (%)"]})
             sweep = pd.DataFrame(lignes)
@@ -827,7 +832,8 @@ def page_dashboard(d, R):
                         ("STEG — tarifs d'autoproduction (surplus)", "https://www.steg.com.tn/fr/page/tarifs-de-l%E2%80%99%C3%A9lectricit%C3%A9-produite-%C3%A0-partir-d%E2%80%99autres-types-d%E2%80%99autoproduction"),
                         ("Guide des projets ENR en Tunisie (2019)", "https://www.tunisieindustrie.gov.tn/upload/ENR/Guide_detaille_ENR_tunisie_mai2019.pdf"),
                         ("Guide ANME d'autoproduction PV", "https://www.anme.tn/sites/default/files/2025-02/Guide%20pour%20l%E2%80%99%C3%A9laboration%20des%20%C3%A9tudes%20de%20faisabilit%C3%A9%20et%20l%E2%80%99assistance%20technique%20des%20projets%20d%E2%80%99autoproduction%20d%E2%80%99%C3%A9lectricit%C3%A9%20par%20l%E2%80%99%C3%A9nergie%20solaire%20photovolta%C3%AFque.pdf"),
-                        ("Marché photovoltaïque en Tunisie (GIZ, 2013)", "https://energypedia.info/images/6/64/March%C3%A9PhotovoltaiqueTunisie_GIZ_082013.pdf")])
+                        ("Marché photovoltaïque en Tunisie (GIZ, 2013)", "https://energypedia.info/images/6/64/March%C3%A9PhotovoltaiqueTunisie_GIZ_082013.pdf"),
+                        ("Formation ANME/GIZ : aspects économiques des projets PV (module 3)", "https://energypedia.info/images/8/8e/Module_3_Formation_BE.pdf")])
 
     # ---------------- Comparaison
     with t_cmp:
@@ -881,13 +887,15 @@ def page_dashboard(d, R):
         st.markdown("#### Sensibilité de la VAN")
         proj = st.selectbox("Projet", PROJETS, index=2)
         sp_sel = specs[PROJETS.index(proj)]
-        taux_grid = [0.07, 0.10, 0.12, 0.14]
-        g_grid = [0.0, 0.03, 0.06]
+        taux_grid = [0.07, 0.08, 0.10, 0.12, 0.14]
+        g_grid = [0.0, 0.03, 0.05, 0.06]
         mat = pd.DataFrame({f"g = {g:.0%}": [evaluer(sp_sel, P, tarif, a=a, g=g)["VAN (TND)"] for a in taux_grid] for g in g_grid},
                            index=[f"a = {a:.0%}" for a in taux_grid])
         st.plotly_chart(px.imshow(mat, text_auto=",.0f", color_continuous_scale="RdYlGn", aspect="auto",
                                   title=f"VAN de {proj} : taux d'actualisation × hausse du prix de l'électricité"), **STRETCH)
-        ressources([("IRENA — Renewable Cost Database", ""), ("BCT — taux directeur et inflation", "https://fr.allafrica.com/stories/202610080466.html"),
+        ressources([("Formation ANME/GIZ : taux d'actualisation, croissance des tarifs (module 3)", "https://energypedia.info/images/8/8e/Module_3_Formation_BE.pdf"),
+                    ("Prix indicatif du carbone proposé en Tunisie (La Presse/allAfrica, 2026)", "https://fr.allafrica.com/stories/202603240305.html"),
+                    ("IRENA — Renewable Cost Database", ""), ("BCT — taux directeur et inflation", "https://fr.allafrica.com/stories/202610080466.html"),
                     ("Support de cours : Choix d'investissements pour les systèmes énergétiques", "")])
 
 
