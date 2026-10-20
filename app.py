@@ -467,7 +467,7 @@ def page_overview(d, R):
         k4.metric("Émissions annuelles (scope 2)", fmt(R["conso_an"] * st.session_state["P"]["fe"] / 1000, 0, " tCO₂"))
     st.subheader("Comment naviguer")
     st.table(pd.DataFrame({
-        "Page": ["Chapitre I", "Données de l'entreprise", "Paramètres", "Benchmarking", "Dashboard"],
+        "Page": ["Distribution de la consommation", "Données de l'entreprise", "Paramètres", "Benchmarking", "Dashboard"],
         "Contenu": ["Histoire de la consommation : corrélations, modèles, formules, ressources",
                     "Dictionnaire de données, indicateurs agrégés, contrôle de cohérence",
                     "Hypothèses chiffrées, sources, modification interactive",
@@ -476,8 +476,8 @@ def page_overview(d, R):
     }))
 
 
-def page_chapitre1(d, R):
-    hero("Chapitre I — Comprendre la consommation", "Avant d'économiser, il faut savoir ce qui consomme, et de combien.")
+def page_distribution_consommation(d, R):
+    hero("Distribution de la consommation — Comprendre la consommation", "Avant d'économiser, il faut savoir ce qui consomme, et de combien.")
     P = st.session_state["P"]
 
     st.header("Scène 1 · Un site, trois gros mangeurs d'énergie")
@@ -894,8 +894,8 @@ def page_dashboard(d, R):
 # ----------------------------------------------------------------------------
 # NAVIGATION
 # ----------------------------------------------------------------------------
-PAGES = ["Overview", "Chapitre I", "Données de l'entreprise", "Paramètres", "Benchmarking", "Dashboard"]
-ICONES = {"Overview": "🏠", "Chapitre I": "📖", "Données de l'entreprise": "🗂️", "Paramètres": "⚙️", "Benchmarking": "🏭", "Dashboard": "📊"}
+PAGES = ["Overview", "Distribution de la consommation", "Données de l'entreprise", "Paramètres", "Benchmarking", "Dashboard"]
+ICONES = {"Overview": "🏠", "Distribution de la consommation": "📖", "Données de l'entreprise": "🗂️", "Paramètres": "⚙️", "Benchmarking": "🏭", "Dashboard": "📊"}
 
 if "page" not in st.session_state:
     st.session_state["page"] = "Overview"
@@ -917,7 +917,7 @@ if source:
     st.sidebar.caption(f"Données : {source}\n{len(d)} jours")
 
 page = st.session_state["page"]
-if d is None and page in ("Overview", "Chapitre I", "Dashboard", "Benchmarking"):
+if d is None and page in ("Overview", "Distribution de la consommation", "Dashboard", "Benchmarking"):
     if page == "Benchmarking":
         page_benchmarking(None, None)
     elif page == "Overview":
@@ -925,5 +925,5 @@ if d is None and page in ("Overview", "Chapitre I", "Dashboard", "Benchmarking")
     else:
         st.error("Le fichier Excel est introuvable : vérifie le chemin DATA_PATH en haut de app.py ou charge le fichier dans la barre latérale.")
 else:
-    {"Overview": page_overview, "Chapitre I": page_chapitre1, "Données de l'entreprise": page_donnees,
+    {"Overview": page_overview, "Distribution de la consommation": page_distribution_consommation, "Données de l'entreprise": page_donnees,
      "Paramètres": page_parametres, "Benchmarking": page_benchmarking, "Dashboard": page_dashboard}[page](d, R)
