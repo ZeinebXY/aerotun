@@ -20,7 +20,7 @@ from scipy.optimize import brentq
 # ----------------------------------------------------------------------------
 # CONFIGURATION
 # ----------------------------------------------------------------------------
-DATA_PATH = os.environ.get("AEROTUN_DATA", r"C:\Users\User\OneDrive\Documents\Aerotun.xlsx")
+DATA_PATH = os.environ.get("AEROTUN_DATA", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "Aerotun.xlsx"))
 SHEET = "Feuil1"
 
 
