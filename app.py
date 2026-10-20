@@ -68,9 +68,13 @@ SEUIL_P = 0.05
 # ----------------------------------------------------------------------------
 # PARAMÈTRES PAR DÉFAUT (modifiables dans la page « Paramètres »)
 # ----------------------------------------------------------------------------
+# Aligné sur le notebook Colab :
+# TAUX_ACTUALISATION=0.10, HAUSSE_PRIX_ELEC=0.03, INFLATION_OPEX=0.055,
+# PV_OPEX_KWC=62 TND/kWc/an (GIZ 2013), PV_PART_REMPLACEMENT=0.10 en année 12.
 P_DEFAUT = dict(
-    taux=0.08, g=0.05, infl=0.055, fe=0.58, prix_carbone=50.0, usd=3.0,
-    pv_kwc=150.0, pv_prod=1650.0, pv_capex_kwc=2500.0, pv_opex_pct=0.02, pv_remp_an=12, pv_remp_part=0.0,
+    taux=0.10, g=0.03, infl=0.055, fe=0.58, prix_carbone=50.0, usd=3.0,
+    pv_kwc=150.0, pv_prod=1650.0, pv_capex_kwc=2500.0, pv_opex_kwc=62.0,
+    pv_remp_an=12, pv_remp_part=0.10,
     tarif_vente=0.12, pv_surplus_max=0.30, pv_deg=0.005,
     capex_sob=5000.0, opex_sob=0.0, capex_eff=85000.0, opex_eff=2000.0,
     vie_sob=5, vie_eff=10, vie_pv=20,
@@ -399,7 +403,9 @@ def analyser(d: pd.DataFrame, P_json: str):
         taux, auto, surplus, _ = autoconso_pv(d, P, P["pv_kwc"], fr)
         surplus = min(surplus, P["pv_surplus_max"] * (auto + surplus))
         capex_pv = P["pv_kwc"] * P["pv_capex_kwc"]
-        sp_pv = spec("Photovoltaïque", auto, P, surplus, capex=capex_pv, opex=P["pv_opex_pct"] * capex_pv,
+        # OPEX PV = 62 TND/kWc/an (Colab / GIZ 2013), hors remplacement onduleur
+        sp_pv = spec("Photovoltaïque", auto, P, surplus, capex=capex_pv,
+                     opex=P["pv_opex_kwc"] * P["pv_kwc"],
                      remp={int(P["pv_remp_an"]): P["pv_remp_part"] * capex_pv})
         sps = [spec("Sobriété", eco_sob, P), spec("Efficacité", eco_eff, P), sp_pv]
         if P["fte"]:
@@ -584,29 +590,31 @@ def page_donnees(d, R):
         st.download_button("Télécharger les données nettoyées (CSV)", d.to_csv(index=False).encode("utf-8"), "aerotun_nettoye.csv", "text/csv")
 
 
+# Tableau des paramètres aligné sur le notebook Colab (mêmes valeurs et mêmes sources)
 PARAM_TABLE = pd.DataFrame(
     [
-        ["Taux d'actualisation", "8 %", "Formation ANME/GIZ des bureaux d'études PV, module 3 (données d'entrée) ; test 7-14 %", "Sourcé"],
-        ["Hausse du prix de l'électricité", "5 %/an", "Même formation ; +15 % pour les industriels en 2022, tarif MT inchangé depuis 10/2022 (STEG) ; testé 0-6 %", "Sourcé (secondaire)"],
-        ["Inflation de la maintenance", "5,5 %/an", "BCT, inflation de septembre 2026 (la formation retient 4 % en exemple)", "Sourcé"],
-        ["Facteur d'émission du réseau", "0,58 kgCO₂/kWh", "U4E 2019 ; IFI 0,404-0,470 ; 0,48 avec le mix 2025 ; à remplacer par le facteur du cahier des charges ANME (août 2026)", "Sourcé (secondaire)"],
-        ["Prix du carbone", "50 TND/tCO₂", "Prix indicatif proposé par une professeure de l'Université de La Manouba (mars 2026) ; pas de prix officiel en Tunisie", "Sourcé (secondaire)"],
+        ["Taux d'actualisation", "10 %", "Notebook Colab : TAUX_ACTUALISATION = 0,10 (taux directeur BCT 7 % + prime de risque ; test 7-14 %)", "Aligné Colab"],
+        ["Hausse du prix de l'électricité", "3 %/an", "Notebook Colab : HAUSSE_PRIX_ELEC = 0,03 ; barème MT STEG inchangé depuis 01/10/2022", "Aligné Colab"],
+        ["Inflation de la maintenance", "5,5 %/an", "Notebook Colab : INFLATION_OPEX = 0,055 (INS/BCT sept. 2026)", "Aligné Colab"],
+        ["Facteur d'émission du réseau", "0,58 kgCO₂/kWh", "Notebook Colab : FACTEUR_EMISSION = 0,58 (U4E 2019) ; sensibilité 0,48", "Aligné Colab"],
+        ["Prix du carbone", "50 TND/tCO₂", "Notebook Colab : PRIX_CARBONE_REF = 50 (illustratif)", "Aligné Colab"],
         ["Taux de change", "3,0 TND/USD", "BCT, 08/10/2026", "Sourcé"],
-        ["Productible PV", "1 650 kWh/kWc/an", "Guide ANME d'autoproduction", "Sourcé"],
-        ["CAPEX PV", "2 500 TND/kWc", "Marché tunisien 2 000-2 900 ; Safran Soliman 2 765", "Sourcé (secondaire)"],
-        ["Maintenance PV (renouvellement inclus)", "2 % du CAPEX/an (≈ 50 TND/kWc)", "Formation ANME/GIZ, module 3 ; contrôle GIZ 2013 : 62 TND/kWc/an", "Sourcé"],
-        ["Durée de vie et dégradation PV", "20 ans ; -0,5 %/an", "Guide ANME d'autoproduction PV ; formation ANME/GIZ", "Sourcé"],
-        ["Tarif d'achat du surplus", "0,12 TND/kWh", "STEG, barème autoproduction", "Sourcé"],
+        ["Productible PV", "1 650 kWh/kWc/an", "Guide ANME d'autoproduction (identique Colab)", "Sourcé"],
+        ["CAPEX PV", "2 500 TND/kWc", "Notebook Colab : PV_CAPEX_KWC = 2500 ; marché 2 000-2 900 ; Safran Soliman 2 765", "Aligné Colab"],
+        ["OPEX PV (hors onduleur)", "62 TND/kWc/an", "Notebook Colab : PV_OPEX_KWC = 62 (GIZ 2013) — plus 2 % du CAPEX", "Aligné Colab"],
+        ["Remplacement onduleur", "10 % du CAPEX en année 12", "Notebook Colab : PV_ANNEE_REMPLACEMENT = 12 ; PV_PART_REMPLACEMENT = 0,10", "Aligné Colab"],
+        ["Durée de vie et dégradation PV", "20 ans ; -0,5 %/an", "Guide ANME ; notebook Colab", "Sourcé"],
+        ["Tarif d'achat du surplus", "0,12 TND/kWh", "Notebook Colab / STEG barème autoproduction", "Aligné Colab"],
         ["Plafond de vente du surplus", "30 % de la production", "Guide ENR Tunisie 2019", "Sourcé"],
         ["Tarif moyen implicite", "calculé", "Coût total / consommation totale des données", "Calculé"],
-        ["CAPEX / OPEX sobriété", "5 000 TND / 0", "Aucune source tunisienne trouvée : devis d'un expert auditeur agréé ANME à obtenir", "Hypothèse"],
-        ["CAPEX / OPEX efficacité", "85 000 TND / 2 000", "Aucune source tunisienne trouvée : devis d'un expert auditeur agréé ANME à obtenir", "Hypothèse"],
-        ["Durées de vie sobriété / efficacité", "5 / 10 ans", "Choix de l'étudiante (aucune source tunisienne trouvée)", "Hypothèse"],
+        ["CAPEX / OPEX sobriété", "5 000 TND / 0", "Notebook Colab (hypothèse à remplacer par devis)", "Aligné Colab — devis prioritaires"],
+        ["CAPEX / OPEX efficacité", "85 000 TND / 2 000", "Notebook Colab (hypothèse à remplacer par devis)", "Aligné Colab — devis prioritaires"],
+        ["Durées de vie sobriété / efficacité", "5 / 10 ans", "Notebook Colab : DUREE_VIE", "Aligné Colab"],
         ["Ancre autoclave", "-16 %", "Projet UE OPTO-CLAVE", "International"],
-        ["Ancre usinage CNC", "-12 %", "Littérature CNC (source non académique)", "International"],
-        ["Transférabilité du benchmark", "⅓ / ⅔ / 1", "Choix de l'étudiante", "Hypothèse"],
-        ["Part de veille, week-ends coupés, anomalies évitées, cible de fuites", "15 % ; 15/30/50 % ; 50/75/100 % ; 11/10/8 %", "Choix de l'étudiante", "Hypothèse"],
-        ["Subventions FTE", "20 % PV (plafond 200 000) ; jusqu'à 50 % efficacité", "ANME (guide ER 2024 ; déclaration 2026)", "Sourcé"],
+        ["Ancre usinage CNC", "-12 %", "Littérature CNC", "International"],
+        ["Transférabilité du benchmark", "⅓ / ⅔ / 1", "Notebook Colab : TRANSFERT", "Aligné Colab"],
+        ["Part de veille, week-ends, anomalies, fuites", "15 % ; 15/30/50 % ; 50/75/100 % ; 11/10/8 %", "Notebook Colab", "Aligné Colab"],
+        ["Subventions FTE", "20 % PV (plafond 200 000) ; jusqu'à 50 % efficacité", "ANME (guide ER 2024)", "Sourcé"],
     ],
     columns=["Paramètre", "Valeur par défaut", "Source", "Statut"],
 )
@@ -631,7 +639,7 @@ def page_parametres(d, R):
             kwc = st.number_input("Puissance (kWc)", 10.0, 2000.0, float(P["pv_kwc"]), 10.0)
             prod = st.number_input("Productible (kWh/kWc/an)", 1000.0, 2200.0, float(P["pv_prod"]), 10.0)
             capex_kwc = st.number_input("CAPEX (TND/kWc)", 1000.0, 5000.0, float(P["pv_capex_kwc"]), 50.0)
-            opex_pct = st.number_input("Maintenance et renouvellement (% du CAPEX/an)", 0.0, 0.10, float(P["pv_opex_pct"]), 0.005, format="%.3f")
+            opex_kwc = st.number_input("OPEX PV (TND/kWc/an, hors onduleur)", 0.0, 200.0, float(P.get("pv_opex_kwc", 62.0)), 1.0)
             t_vente = st.number_input("Tarif de vente du surplus (TND/kWh)", 0.0, 0.5, float(P["tarif_vente"]), 0.01)
         with c3:
             st.markdown("**Sobriété et efficacité**")
@@ -644,7 +652,7 @@ def page_parametres(d, R):
     if ok:
         nouveau = dict(P)
         nouveau.update(taux=taux, g=g, infl=infl, fe=fe, prix_carbone=prix_c, pv_kwc=kwc, pv_prod=prod, pv_capex_kwc=capex_kwc,
-                       pv_opex_pct=opex_pct, tarif_vente=t_vente, capex_sob=capex_sob, opex_sob=opex_sob, capex_eff=capex_eff,
+                       pv_opex_kwc=opex_kwc, tarif_vente=t_vente, capex_sob=capex_sob, opex_sob=opex_sob, capex_eff=capex_eff,
                        opex_eff=opex_eff, part_veille=part_veille)
         st.session_state["P"] = nouveau
         st.success("Paramètres appliqués. Ouvre le Dashboard pour voir les résultats.")
@@ -806,7 +814,9 @@ def page_dashboard(d, R):
                 tx, au, su, _ = autoconso_pv(d, P, k, fr)
                 su = min(su, P["pv_surplus_max"] * (au + su))
                 capex = k * P["pv_capex_kwc"]
-                s_ = spec("Photovoltaïque", au, P, su, capex=capex, opex=P["pv_opex_pct"] * capex, remp={int(P["pv_remp_an"]): P["pv_remp_part"] * capex})
+                s_ = spec("Photovoltaïque", au, P, su, capex=capex,
+                          opex=P["pv_opex_kwc"] * k,
+                          remp={int(P["pv_remp_an"]): P["pv_remp_part"] * capex})
                 r = evaluer(s_, P, tarif)
                 lignes.append({"kWc": k, "Autoconsommation (%)": tx * 100, "VAN (TND)": r["VAN (TND)"], "TRI (%)": r["TRI (%)"]})
             sweep = pd.DataFrame(lignes)
