@@ -39,12 +39,155 @@ st.set_page_config(page_title="AEROTUN — Transition énergétique", page_icon=
 st.markdown(
     """
     <style>
-    .hero {background: linear-gradient(120deg,#0b3d91 0%,#1b6ca8 60%,#2ec4b6 100%);
-           padding: 28px 32px; border-radius: 14px; color: white; margin-bottom: 18px;}
-    .hero h1 {margin: 0 0 6px 0; font-size: 2.0rem; color: white;}
-    .hero p {margin: 0; font-size: 1.05rem; opacity: .95;}
-    .pill {display:inline-block; padding:3px 12px; border-radius:20px; background:#e8f1fb;
-           color:#0b3d91; font-size:.82rem; margin-right:6px;}
+    /* ---------- Base ---------- */
+    .stApp { background: #f7fafc; }
+    
+    /* ---------- Animated Hero ---------- */
+    .hero {
+        background: linear-gradient(125deg, #0b3d91 0%, #1b6ca8 45%, #2ec4b6 100%);
+        background-size: 200% 200%;
+        animation: energyFlow 12s ease infinite;
+        padding: 32px 36px;
+        border-radius: 16px;
+        color: white;
+        margin-bottom: 22px;
+        position: relative;
+        overflow: hidden;
+        box-shadow: 0 10px 30px rgba(11, 61, 145, 0.25);
+    }
+    .hero::before {
+        content: "";
+        position: absolute;
+        top: -50%;
+        left: -50%;
+        width: 200%;
+        height: 200%;
+        background: radial-gradient(circle, rgba(255,255,255,0.12) 0%, transparent 60%);
+        animation: softPulse 8s ease-in-out infinite;
+    }
+    .hero h1 {
+        margin: 0 0 8px 0;
+        font-size: 2.15rem;
+        color: white;
+        position: relative;
+        z-index: 1;
+        letter-spacing: -0.5px;
+    }
+    .hero p {
+        margin: 0;
+        font-size: 1.08rem;
+        opacity: .95;
+        position: relative;
+        z-index: 1;
+    }
+    
+    @keyframes energyFlow {
+        0%   { background-position: 0% 50%; }
+        50%  { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+    }
+    @keyframes softPulse {
+        0%, 100% { transform: scale(1); opacity: 0.5; }
+        50%      { transform: scale(1.15); opacity: 0.8; }
+    }
+    
+    /* ---------- Pills ---------- */
+    .pill {
+        display: inline-block;
+        padding: 4px 14px;
+        border-radius: 20px;
+        background: rgba(255,255,255,0.18);
+        color: white;
+        font-size: .82rem;
+        margin-right: 8px;
+        backdrop-filter: blur(4px);
+        border: 1px solid rgba(255,255,255,0.25);
+    }
+    
+    /* ---------- Three pillars cards ---------- */
+    .pillar {
+        background: white;
+        border-radius: 14px;
+        padding: 18px 20px;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+        transition: transform 0.25s ease, box-shadow 0.25s ease;
+        height: 100%;
+    }
+    .pillar:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 12px 24px rgba(0,0,0,0.08);
+    }
+    .pillar-sob  { border-top: 4px solid #2ec4b6; }
+    .pillar-eff  { border-top: 4px solid #e71d36; }
+    .pillar-pv   { border-top: 4px solid #ff9f1c; }
+    
+    .pillar h5 {
+        margin: 0 0 8px 0;
+        font-size: 1.05rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    
+    /* Solar panel icon animation */
+    .solar-icon {
+        display: inline-block;
+        animation: solarSpin 6s linear infinite;
+        font-size: 1.25rem;
+    }
+    @keyframes solarSpin {
+        0%   { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    
+    /* Economy / savings glow on metrics */
+    .metric-economy [data-testid="stMetricValue"] {
+        color: #059669 !important;
+        text-shadow: 0 0 12px rgba(5, 150, 105, 0.25);
+    }
+    
+    /* Smooth tab underline */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px 8px 0 0;
+        padding: 10px 18px;
+        font-weight: 500;
+    }
+    
+    /* Sidebar energy accent */
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #0b3d91 0%, #1b6ca8 100%);
+    }
+    section[data-testid="stSidebar"] * {
+        color: white !important;
+    }
+    section[data-testid="stSidebar"] .stButton > button {
+        background: rgba(255,255,255,0.12) !important;
+        border: 1px solid rgba(255,255,255,0.25) !important;
+        color: white !important;
+        transition: all 0.2s ease;
+    }
+    section[data-testid="stSidebar"] .stButton > button:hover {
+        background: rgba(255,255,255,0.22) !important;
+        transform: translateX(3px);
+    }
+    section[data-testid="stSidebar"] .stButton > button[kind="primary"] {
+        background: #2ec4b6 !important;
+        border-color: #2ec4b6 !important;
+        font-weight: 600;
+    }
+    
+    /* Subtle fade-in for content */
+    .main .block-container {
+        animation: fadeIn 0.6s ease-out;
+    }
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(8px); }
+        to   { opacity: 1; transform: translateY(0); }
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -68,13 +211,9 @@ SEUIL_P = 0.05
 # ----------------------------------------------------------------------------
 # PARAMÈTRES PAR DÉFAUT (modifiables dans la page « Paramètres »)
 # ----------------------------------------------------------------------------
-# Aligné sur le notebook Colab :
-# TAUX_ACTUALISATION=0.10, HAUSSE_PRIX_ELEC=0.03, INFLATION_OPEX=0.055,
-# PV_OPEX_KWC=62 TND/kWc/an (GIZ 2013), PV_PART_REMPLACEMENT=0.10 en année 12.
 P_DEFAUT = dict(
-    taux=0.10, g=0.03, infl=0.055, fe=0.58, prix_carbone=50.0, usd=3.0,
-    pv_kwc=150.0, pv_prod=1650.0, pv_capex_kwc=2500.0, pv_opex_kwc=62.0,
-    pv_remp_an=12, pv_remp_part=0.10,
+    taux=0.08, g=0.05, infl=0.055, fe=0.58, prix_carbone=50.0, usd=3.0,
+    pv_kwc=150.0, pv_prod=1650.0, pv_capex_kwc=2500.0, pv_opex_pct=0.02, pv_remp_an=12, pv_remp_part=0.0,
     tarif_vente=0.12, pv_surplus_max=0.30, pv_deg=0.005,
     capex_sob=5000.0, opex_sob=0.0, capex_eff=85000.0, opex_eff=2000.0,
     vie_sob=5, vie_eff=10, vie_pv=20,
@@ -132,7 +271,7 @@ AGREGATS = pd.DataFrame(
 # ----------------------------------------------------------------------------
 def _num(s: pd.Series) -> pd.Series:
     s = s.astype(str)
-    for esp in (" ", "\u00a0", "\u202f", "\u2009", "\t"):   # espaces normaux, insécables, fines (pandas 3 / pyarrow ne les gère pas avec \s)
+    for esp in (" ", "\u00a0", "\u202f", "\u2009", "\t"):
         s = s.str.replace(esp, "", regex=False)
     s = s.str.replace(",", ".", regex=False)
     return pd.to_numeric(s, errors="coerce")
@@ -157,7 +296,6 @@ def nettoyer(brut: pd.DataFrame) -> pd.DataFrame:
     if "Mois" in df.columns and dt.notna().any():
         mois = pd.to_numeric(df["Mois"], errors="coerce")
         inv = pd.to_datetime(dict(year=dt.dt.year, month=dt.dt.day, day=dt.dt.month), errors="coerce")
-        # Excel lit certains jj/mm en mm/jj : on inverse seulement les lignes dont le mois ne colle pas à la colonne « Mois »
         swap = (dt.dt.month != mois) & (inv.dt.month == mois)
         dt = dt.where(~swap, inv)
     df["Date"] = dt
@@ -350,7 +488,7 @@ def analyser(d: pd.DataFrame, P_json: str):
 
     # --- Comparaison des modèles M1, M2, M6
     fin_base = d["Date"].min() + pd.DateOffset(months=12) - pd.Timedelta(days=1)
-    d_ref = d[d["Date"] <= fin_base]          # période de référence 12 mois, comme le notebook
+    d_ref = d[d["Date"] <= fin_base]
     R["comp_modeles"], objets = comparaison_modeles(d_ref)
 
     # --- Effet de l'arrêt annuel (M6) et anomalies HVAC
@@ -403,9 +541,7 @@ def analyser(d: pd.DataFrame, P_json: str):
         taux, auto, surplus, _ = autoconso_pv(d, P, P["pv_kwc"], fr)
         surplus = min(surplus, P["pv_surplus_max"] * (auto + surplus))
         capex_pv = P["pv_kwc"] * P["pv_capex_kwc"]
-        # OPEX PV = 62 TND/kWc/an (Colab / GIZ 2013), hors remplacement onduleur
-        sp_pv = spec("Photovoltaïque", auto, P, surplus, capex=capex_pv,
-                     opex=P["pv_opex_kwc"] * P["pv_kwc"],
+        sp_pv = spec("Photovoltaïque", auto, P, surplus, capex=capex_pv, opex=P["pv_opex_pct"] * capex_pv,
                      remp={int(P["pv_remp_an"]): P["pv_remp_part"] * capex_pv})
         sps = [spec("Sobriété", eco_sob, P), spec("Efficacité", eco_eff, P), sp_pv]
         if P["fte"]:
@@ -460,15 +596,54 @@ def page_overview(d, R):
         "4. **Évaluer** chaque projet : VAN, TRI, temps de retour, VAN/I, annuité équivalente, LCOE, CO₂ évité, coût d'abattement.\n"
         "5. **Choisir** par optimisation multi-objectifs (énergie, économie, environnement)."
     )
+
+    # Three animated pillars
     c1, c2, c3 = st.columns(3)
-    c1.markdown("##### 🟢 Sobriété\nSupprimer les consommations inutiles : veille, week-ends, dérives de climatisation.")
-    c2.markdown("##### 🔴 Efficacité\nAméliorer les équipements : fuites d'air comprimé, cycle d'autoclave, usinage CNC.")
-    c3.markdown("##### 🟠 Photovoltaïque\nProduire sur place et autoconsommer, avec injection plafonnée du surplus.")
+    with c1:
+        st.markdown(
+            """
+            <div class="pillar pillar-sob">
+                <h5>🟢 Sobriété</h5>
+                <p style="margin:0; font-size:0.95rem; color:#334155;">
+                    Supprimer les consommations inutiles : veille, week-ends, dérives de climatisation.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown(
+            """
+            <div class="pillar pillar-eff">
+                <h5>🔴 Efficacité</h5>
+                <p style="margin:0; font-size:0.95rem; color:#334155;">
+                    Améliorer les équipements : fuites d'air comprimé, cycle d'autoclave, usinage CNC.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with c3:
+        st.markdown(
+            """
+            <div class="pillar pillar-pv">
+                <h5><span class="solar-icon">🔆</span> Photovoltaïque</h5>
+                <p style="margin:0; font-size:0.95rem; color:#334155;">
+                    Produire sur place et autoconsommer, avec injection plafonnée du surplus.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     if R:
         st.subheader("Le site en chiffres")
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Consommation annuelle", fmt(R["conso_an"] / 1e6, 2, " GWh"))
-        k2.metric("Coût énergétique annuel", fmt(R["cout_an"] / 1e3, 0, " kTND"))
+        with k2:
+            st.markdown('<div class="metric-economy">', unsafe_allow_html=True)
+            st.metric("Coût énergétique annuel", fmt(R["cout_an"] / 1e3, 0, " kTND"))
+            st.markdown('</div>', unsafe_allow_html=True)
         k3.metric("Jours analysés", fmt(R["n"]))
         k4.metric("Émissions annuelles (scope 2)", fmt(R["conso_an"] * st.session_state["P"]["fe"] / 1000, 0, " tCO₂"))
     st.subheader("Comment naviguer")
@@ -590,31 +765,29 @@ def page_donnees(d, R):
         st.download_button("Télécharger les données nettoyées (CSV)", d.to_csv(index=False).encode("utf-8"), "aerotun_nettoye.csv", "text/csv")
 
 
-# Tableau des paramètres aligné sur le notebook Colab (mêmes valeurs et mêmes sources)
 PARAM_TABLE = pd.DataFrame(
     [
-        ["Taux d'actualisation", "10 %", "Notebook Colab : TAUX_ACTUALISATION = 0,10 (taux directeur BCT 7 % + prime de risque ; test 7-14 %)", "Aligné Colab"],
-        ["Hausse du prix de l'électricité", "3 %/an", "Notebook Colab : HAUSSE_PRIX_ELEC = 0,03 ; barème MT STEG inchangé depuis 01/10/2022", "Aligné Colab"],
-        ["Inflation de la maintenance", "5,5 %/an", "Notebook Colab : INFLATION_OPEX = 0,055 (INS/BCT sept. 2026)", "Aligné Colab"],
-        ["Facteur d'émission du réseau", "0,58 kgCO₂/kWh", "Notebook Colab : FACTEUR_EMISSION = 0,58 (U4E 2019) ; sensibilité 0,48", "Aligné Colab"],
-        ["Prix du carbone", "50 TND/tCO₂", "Notebook Colab : PRIX_CARBONE_REF = 50 (illustratif)", "Aligné Colab"],
+        ["Taux d'actualisation", "8 %", "Formation ANME/GIZ des bureaux d'études PV, module 3 (données d'entrée) ; test 7-14 %", "Sourcé"],
+        ["Hausse du prix de l'électricité", "5 %/an", "Même formation ; +15 % pour les industriels en 2022, tarif MT inchangé depuis 10/2022 (STEG) ; testé 0-6 %", "Sourcé (secondaire)"],
+        ["Inflation de la maintenance", "5,5 %/an", "BCT, inflation de septembre 2026 (la formation retient 4 % en exemple)", "Sourcé"],
+        ["Facteur d'émission du réseau", "0,58 kgCO₂/kWh", "U4E 2019 ; IFI 0,404-0,470 ; 0,48 avec le mix 2025 ; à remplacer par le facteur du cahier des charges ANME (août 2026)", "Sourcé (secondaire)"],
+        ["Prix du carbone", "50 TND/tCO₂", "Prix indicatif proposé par une professeure de l'Université de La Manouba (mars 2026) ; pas de prix officiel en Tunisie", "Sourcé (secondaire)"],
         ["Taux de change", "3,0 TND/USD", "BCT, 08/10/2026", "Sourcé"],
-        ["Productible PV", "1 650 kWh/kWc/an", "Guide ANME d'autoproduction (identique Colab)", "Sourcé"],
-        ["CAPEX PV", "2 500 TND/kWc", "Notebook Colab : PV_CAPEX_KWC = 2500 ; marché 2 000-2 900 ; Safran Soliman 2 765", "Aligné Colab"],
-        ["OPEX PV (hors onduleur)", "62 TND/kWc/an", "Notebook Colab : PV_OPEX_KWC = 62 (GIZ 2013) — plus 2 % du CAPEX", "Aligné Colab"],
-        ["Remplacement onduleur", "10 % du CAPEX en année 12", "Notebook Colab : PV_ANNEE_REMPLACEMENT = 12 ; PV_PART_REMPLACEMENT = 0,10", "Aligné Colab"],
-        ["Durée de vie et dégradation PV", "20 ans ; -0,5 %/an", "Guide ANME ; notebook Colab", "Sourcé"],
-        ["Tarif d'achat du surplus", "0,12 TND/kWh", "Notebook Colab / STEG barème autoproduction", "Aligné Colab"],
+        ["Productible PV", "1 650 kWh/kWc/an", "Guide ANME d'autoproduction", "Sourcé"],
+        ["CAPEX PV", "2 500 TND/kWc", "Marché tunisien 2 000-2 900 ; Safran Soliman 2 765", "Sourcé (secondaire)"],
+        ["Maintenance PV (renouvellement inclus)", "2 % du CAPEX/an (≈ 50 TND/kWc)", "Formation ANME/GIZ, module 3 ; contrôle GIZ 2013 : 62 TND/kWc/an", "Sourcé"],
+        ["Durée de vie et dégradation PV", "20 ans ; -0,5 %/an", "Guide ANME d'autoproduction PV ; formation ANME/GIZ", "Sourcé"],
+        ["Tarif d'achat du surplus", "0,12 TND/kWh", "STEG, barème autoproduction", "Sourcé"],
         ["Plafond de vente du surplus", "30 % de la production", "Guide ENR Tunisie 2019", "Sourcé"],
         ["Tarif moyen implicite", "calculé", "Coût total / consommation totale des données", "Calculé"],
-        ["CAPEX / OPEX sobriété", "5 000 TND / 0", "Notebook Colab (hypothèse à remplacer par devis)", "Aligné Colab — devis prioritaires"],
-        ["CAPEX / OPEX efficacité", "85 000 TND / 2 000", "Notebook Colab (hypothèse à remplacer par devis)", "Aligné Colab — devis prioritaires"],
-        ["Durées de vie sobriété / efficacité", "5 / 10 ans", "Notebook Colab : DUREE_VIE", "Aligné Colab"],
+        ["CAPEX / OPEX sobriété", "5 000 TND / 0", "Aucune source tunisienne trouvée : devis d'un expert auditeur agréé ANME à obtenir", "Hypothèse"],
+        ["CAPEX / OPEX efficacité", "85 000 TND / 2 000", "Aucune source tunisienne trouvée : devis d'un expert auditeur agréé ANME à obtenir", "Hypothèse"],
+        ["Durées de vie sobriété / efficacité", "5 / 10 ans", "Choix de l'étudiante (aucune source tunisienne trouvée)", "Hypothèse"],
         ["Ancre autoclave", "-16 %", "Projet UE OPTO-CLAVE", "International"],
-        ["Ancre usinage CNC", "-12 %", "Littérature CNC", "International"],
-        ["Transférabilité du benchmark", "⅓ / ⅔ / 1", "Notebook Colab : TRANSFERT", "Aligné Colab"],
-        ["Part de veille, week-ends, anomalies, fuites", "15 % ; 15/30/50 % ; 50/75/100 % ; 11/10/8 %", "Notebook Colab", "Aligné Colab"],
-        ["Subventions FTE", "20 % PV (plafond 200 000) ; jusqu'à 50 % efficacité", "ANME (guide ER 2024)", "Sourcé"],
+        ["Ancre usinage CNC", "-12 %", "Littérature CNC (source non académique)", "International"],
+        ["Transférabilité du benchmark", "⅓ / ⅔ / 1", "Choix de l'étudiante", "Hypothèse"],
+        ["Part de veille, week-ends coupés, anomalies évitées, cible de fuites", "15 % ; 15/30/50 % ; 50/75/100 % ; 11/10/8 %", "Choix de l'étudiante", "Hypothèse"],
+        ["Subventions FTE", "20 % PV (plafond 200 000) ; jusqu'à 50 % efficacité", "ANME (guide ER 2024 ; déclaration 2026)", "Sourcé"],
     ],
     columns=["Paramètre", "Valeur par défaut", "Source", "Statut"],
 )
@@ -639,7 +812,7 @@ def page_parametres(d, R):
             kwc = st.number_input("Puissance (kWc)", 10.0, 2000.0, float(P["pv_kwc"]), 10.0)
             prod = st.number_input("Productible (kWh/kWc/an)", 1000.0, 2200.0, float(P["pv_prod"]), 10.0)
             capex_kwc = st.number_input("CAPEX (TND/kWc)", 1000.0, 5000.0, float(P["pv_capex_kwc"]), 50.0)
-            opex_kwc = st.number_input("OPEX PV (TND/kWc/an, hors onduleur)", 0.0, 200.0, float(P.get("pv_opex_kwc", 62.0)), 1.0)
+            opex_pct = st.number_input("Maintenance et renouvellement (% du CAPEX/an)", 0.0, 0.10, float(P["pv_opex_pct"]), 0.005, format="%.3f")
             t_vente = st.number_input("Tarif de vente du surplus (TND/kWh)", 0.0, 0.5, float(P["tarif_vente"]), 0.01)
         with c3:
             st.markdown("**Sobriété et efficacité**")
@@ -652,7 +825,7 @@ def page_parametres(d, R):
     if ok:
         nouveau = dict(P)
         nouveau.update(taux=taux, g=g, infl=infl, fe=fe, prix_carbone=prix_c, pv_kwc=kwc, pv_prod=prod, pv_capex_kwc=capex_kwc,
-                       pv_opex_kwc=opex_kwc, tarif_vente=t_vente, capex_sob=capex_sob, opex_sob=opex_sob, capex_eff=capex_eff,
+                       pv_opex_pct=opex_pct, tarif_vente=t_vente, capex_sob=capex_sob, opex_sob=opex_sob, capex_eff=capex_eff,
                        opex_eff=opex_eff, part_veille=part_veille)
         st.session_state["P"] = nouveau
         st.success("Paramètres appliqués. Ouvre le Dashboard pour voir les résultats.")
@@ -732,13 +905,21 @@ def page_dashboard(d, R):
     sav = R["savings"].loc[scenario]
     tarif = R["tarif"]
 
-    t_sob, t_eff, t_pv, t_cmp = st.tabs(["🟢 Sobriété", "🔴 Efficacité", "🟠 Photovoltaïque", "⚖️ Comparaison et choix"])
+    t_sob, t_eff, t_pv, t_cmp = st.tabs([
+        "🟢 Sobriété",
+        "🔴 Efficacité",
+        "🔆 Photovoltaïque",
+        "⚖️ Comparaison et choix"
+    ])
 
     def kpis(nom):
         r = res[nom]
         a, b, c, e = st.columns(4)
         a.metric("Économie (kWh/an)", fmt(r["Économie (kWh/an, an 1)"]))
-        b.metric("Économie 1re année (TND)", fmt(r["Économie nette an 1 (TND)"]))
+        with b:
+            st.markdown('<div class="metric-economy">', unsafe_allow_html=True)
+            st.metric("Économie 1re année (TND)", fmt(r["Économie nette an 1 (TND)"]))
+            st.markdown('</div>', unsafe_allow_html=True)
         c.metric("VAN (TND)", fmt(r["VAN (TND)"]))
         e.metric("TRI", fmt(r["TRI (%)"], 0, " %"))
         a, b, c, e = st.columns(4)
@@ -797,7 +978,7 @@ def page_dashboard(d, R):
 
     # ---------------- PV
     with t_pv:
-        st.subheader("Photovoltaïque : produire et autoconsommer")
+        st.subheader("🔆 Photovoltaïque : produire et autoconsommer")
         kpis("Photovoltaïque")
         m, dn, rs = st.tabs(["Les maths", "Les données de l'entreprise", "Les ressources"])
         sp_pv = specs[2]
@@ -814,9 +995,7 @@ def page_dashboard(d, R):
                 tx, au, su, _ = autoconso_pv(d, P, k, fr)
                 su = min(su, P["pv_surplus_max"] * (au + su))
                 capex = k * P["pv_capex_kwc"]
-                s_ = spec("Photovoltaïque", au, P, su, capex=capex,
-                          opex=P["pv_opex_kwc"] * k,
-                          remp={int(P["pv_remp_an"]): P["pv_remp_part"] * capex})
+                s_ = spec("Photovoltaïque", au, P, su, capex=capex, opex=P["pv_opex_pct"] * capex, remp={int(P["pv_remp_an"]): P["pv_remp_part"] * capex})
                 r = evaluer(s_, P, tarif)
                 lignes.append({"kWc": k, "Autoconsommation (%)": tx * 100, "VAN (TND)": r["VAN (TND)"], "TRI (%)": r["TRI (%)"]})
             sweep = pd.DataFrame(lignes)
