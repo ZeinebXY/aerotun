@@ -724,17 +724,15 @@ def page_overview(d, R):
     st.info(
         "AEROTUN est un site aéronautique tunisien dont l'activité repose sur des centres d'usinage CNC, des autoclaves de cuisson "
         "de composites et une salle blanche climatisée." + chiffres +
-        "\n\n**Comment réduire cette facture et les émissions associées (scope 2) sans compromettre la qualité de la salle blanche, "
+        "\n\n**Comment réduire cette facture et les émissions associées (scope 2) sans compromettre la qualité de la salle blanche, "s
         "et quel portefeuille d'investissements retenir entre sobriété, efficacité énergétique et photovoltaïque ?**"
     )
     st.subheader("Objectif")
     st.markdown(
         "1. **Comprendre** la consommation : normaliser par l'activité (heures CNC, cycles d'autoclave) et distinguer jours ouvrés, week-ends et arrêt annuel.\n"
-        "2. **Chiffrer les gisements** de sobriété et d'efficacité à partir des données de l'entreprise et de benchmarks (aéronautique, Tunisie), "
-        "en trois scénarios : **Prudent, Central, Ambitieux**.\n"
-        "3. **Dimensionner** une centrale photovoltaïque d'autoconsommation.\n"
-        "4. **Évaluer** chaque projet : VAN, TRI, temps de retour, VAN/I, annuité équivalente, LCOE, CO₂ évité, coût d'abattement.\n"
-        "5. **Choisir** par optimisation multi-objectifs (énergie, économie, environnement)."
+        "2. **Chiffrer les gisements de sobriété et d’efficacité énergétique à partir des données de l’entreprise et de benchmarks (aéronautique, Tunisie), selon trois scénarios (Prudent, Central, Ambitieux), et évaluer le potentiel d’une centrale photovoltaïque en autoconsommation : **Prudent, Central, Ambitieux**.\n"
+        "3. **Évaluer** chaque projet : VAN, TRI, temps de retour, VAN/I, annuité équivalente, LCOE, CO₂ évité, coût d'abattement.\n"
+        "4. **Choisir** par optimisation multi-objectifs (énergie, économie, environnement)."
     )
     c1, c2, c3 = st.columns(3)
     c1.markdown("##### 🟢 Sobriété\nSupprimer les consommations inutiles : veille, week-ends, dérives de climatisation.")
