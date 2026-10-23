@@ -255,8 +255,9 @@ SEUIL_P = 0.05
 # Aligné sur le notebook Colab :
 # TAUX_ACTUALISATION=0.10, HAUSSE_PRIX_ELEC=0.03, INFLATION_OPEX=0.055,
 # PV_OPEX_KWC=62 TND/kWc/an (GIZ 2013), PV_PART_REMPLACEMENT=0.10 en année 12.
+# Le facteur d'émission n'est plus ici : il est piloté par les scénarios (voir FE_SCEN).
 P_DEFAUT = dict(
-    taux=0.10, g=0.03, infl=0.055, fe=0.58, prix_carbone=50.0, usd=3.0,
+    taux=0.10, g=0.03, infl=0.055, prix_carbone=50.0, usd=3.0,
     pv_kwc=150.0, pv_prod=1650.0, pv_capex_kwc=2500.0, pv_opex_kwc=62.0,
     pv_remp_an=12, pv_remp_part=0.10,
     tarif_vente=0.12, pv_surplus_max=0.30, pv_deg=0.005,
@@ -266,11 +267,108 @@ P_DEFAUT = dict(
     tr_prudent=1 / 3, tr_central=2 / 3, tr_ambitieux=1.0,
     fte=False, fte_pv=0.20, fte_pv_plafond=200000.0, fte_eff=0.50,
 )
+
+# ----------------------------------------------------------------------------
+# PARAMÈTRES BENCHMARKÉS : trois valeurs (Prudent / Central / Ambitieux)
+# Par défaut, chaque paramètre est sur « Central » (le plus raisonnable des trois).
+# ----------------------------------------------------------------------------
+SCENARIOS = ["Prudent", "Central", "Ambitieux"]
+PERSO = "Personnalisé"            # scénario construit paramètre par paramètre (page Paramètres)
 ANOMALIES_EVITEES = {"Prudent": 0.50, "Central": 0.75, "Ambitieux": 1.00}
 WEEKEND_ARRET = {"Prudent": 0.15, "Central": 0.30, "Ambitieux": 0.50}
 FUITES_CIBLE = {"Prudent": 11.0, "Central": 10.0, "Ambitieux": 8.0}
+# Facteur d'émission du réseau tunisien (kgCO2/kWh)
+#  Prudent   : fiche Safran Soliman 2022 (site ≈ 2,8× plus gros qu'AEROTUN, non audité : borne haute)
+#  Central   : mix 2025 (année la plus proche de la période étudiée)
+#  Ambitieux : STEG, rapport annuel 2024 (officiel, le plus bas, intensité des centrales hors pertes de réseau)
+FE_SCEN = {"Prudent": 0.587, "Central": 0.48, "Ambitieux": 0.4189}
+
+CLES_BENCH = ["fe", "veille", "autoclave", "cnc", "anomalies", "weekend", "fuites"]
+CHOIX_DEFAUT = {k: "Central" for k in CLES_BENCH}
+LIBELLES = {
+    "fe": "Facteur d'émission du réseau (kgCO₂/kWh)",
+    "veille": "Veille évitable (jours ouvrés, part du talon)",
+    "autoclave": "Gain autoclave (ancre OPTO-CLAVE −16 %)",
+    "cnc": "Gain usinage CNC (ancre −12 %)",
+    "anomalies": "Anomalies de climatisation évitées",
+    "weekend": "Week-ends en mode arrêt (part de l'écart)",
+    "fuites": "Fuites d'air comprimé cible (%)",
+}
+SOURCES_BENCH = {
+    "fe": "Prudent : Safran Soliman 2022 (site ≈ 2,8× plus gros, fiche non auditée). Central : mix 2025. "
+          "Ambitieux : STEG 2024 (officiel, hors pertes de réseau). À remplacer par le facteur ANME.",
+    "veille": "Ancre veille −60 % (littérature CNC, fiabilité faible) × part de veille dans le talon × transférabilité",
+    "autoclave": "Projet UE OPTO-CLAVE (−16 % d'énergie) × transférabilité",
+    "cnc": "Littérature CNC (borne haute de −9 à −12 %) × transférabilité",
+    "anomalies": "Hypothèse : part des dérives de climatisation évitées (pas d'ancre publiée)",
+    "weekend": "Hypothèse : part de l'écart base week-end / arrêt annuel réellement obtenue",
+    "fuites": "Objectif ANME : diviser le taux de fuite par deux ; ordre de grandeur Johnson Controls ; hypothèse",
+}
 PROJETS = ["Sobriété", "Efficacité", "Photovoltaïque"]
 COULEURS = {"Sobriété": "#2ec4b6", "Efficacité": "#e71d36", "Photovoltaïque": "#ff9f1c"}
+
+
+def p_defaut():
+    p = dict(P_DEFAUT)
+    p["choix"] = dict(CHOIX_DEFAUT)
+    return p
+
+
+def choix_effectifs(P):
+    return {**CHOIX_DEFAUT, **P.get("choix", {})}
+
+
+def valeurs_bench(P):
+    """Valeurs Prudent / Central / Ambitieux de chaque paramètre benchmarké."""
+    tr = {"Prudent": P["tr_prudent"], "Central": P["tr_central"], "Ambitieux": P["tr_ambitieux"]}
+    return {
+        "fe": dict(FE_SCEN),
+        "veille": {sc: P["ancre_veille"] * P["part_veille"] * t for sc, t in tr.items()},
+        "autoclave": {sc: P["ancre_auto"] * t for sc, t in tr.items()},
+        "cnc": {sc: P["ancre_cnc"] * t for sc, t in tr.items()},
+        "anomalies": dict(ANOMALIES_EVITEES),
+        "weekend": dict(WEEKEND_ARRET),
+        "fuites": dict(FUITES_CIBLE),
+    }
+
+
+def params_scenario(P, sc):
+    """Valeurs retenues pour un scénario pur, ou pour « Personnalisé » (choix de la page Paramètres)."""
+    vb = valeurs_bench(P)
+    ch = choix_effectifs(P) if sc == PERSO else {k: sc for k in CLES_BENCH}
+    v = {k: vb[k][ch[k]] for k in CLES_BENCH}
+    return {"talon_evitable": v["veille"], "anomalies_evitees": v["anomalies"], "weekend_arret": v["weekend"],
+            "fuites_cible": v["fuites"], "gain_autoclave": v["autoclave"], "gain_cnc": v["cnc"],
+            "fe": v["fe"], "choix": ch}
+
+
+def scenarios_params(P):
+    return {sc: params_scenario(P, sc) for sc in SCENARIOS + [PERSO]}
+
+
+def fe_choisi(P):
+    """Facteur d'émission retenu dans la page Paramètres (Central par défaut)."""
+    return valeurs_bench(P)["fe"][choix_effectifs(P)["fe"]]
+
+
+def fmt_bench(cle, v):
+    if cle == "fe":
+        return f"{v:g}".replace(".", ",")
+    if cle == "fuites":
+        return f"{v:g} %".replace(".", ",")
+    return f"{round(v * 100, 1):g} %".replace(".", ",")
+
+
+def table_scenarios(P, choix=None):
+    """Tableau Prudent / Central / Ambitieux + valeur retenue, pour chaque paramètre benchmarké."""
+    vb = valeurs_bench(P)
+    ch = choix_effectifs(P) if choix is None else choix
+    lignes = []
+    for k in CLES_BENCH:
+        lignes.append({"Paramètre": LIBELLES[k], **{sc: fmt_bench(k, vb[k][sc]) for sc in SCENARIOS},
+                       "Scénario retenu": ch[k], "Valeur retenue": fmt_bench(k, vb[k][ch[k]])})
+    return pd.DataFrame(lignes)
+
 
 # ----------------------------------------------------------------------------
 # DONNÉES DE L'ENTREPRISE (dictionnaire et indicateurs fournis)
@@ -465,6 +563,7 @@ def payback(flux, a=0.0):
 
 
 def evaluer(sp, P, tarif, a=None, g=None):
+    """P doit contenir « fe » (facteur du scénario évalué) ; à défaut, le facteur Central."""
     a = P["taux"] if a is None else a
     n = sp["duree"]
     fl = flux_projet(sp, P, tarif, g)
@@ -474,7 +573,7 @@ def evaluer(sp, P, tarif, a=None, g=None):
     opex_t = np.array([sp["opex"] * (1 + P["infl"]) ** (t - 1) + sp["remp"].get(t, 0.0) for t in range(1, n + 1)])
     actu = np.array([(1 + a) ** -t for t in range(1, n + 1)])
     cga = sp["capex"] + (opex_t * actu).sum()
-    co2_t = kwh_t * P["fe"] / 1000.0
+    co2_t = kwh_t * P.get("fe", FE_SCEN["Central"]) / 1000.0
     ae = v * fa
     t_ = tri(fl)
     return {
@@ -497,16 +596,6 @@ def spec(nom, kwh, P, surplus=0.0, capex=None, opex=None, remp=None):
                 capex=float(P.get("capex_" + cle, 0.0) if capex is None else capex),
                 opex=float(P.get("opex_" + cle, 0.0) if opex is None else opex),
                 duree=int(P["vie_" + cle]), deg=P["pv_deg"] if nom == "Photovoltaïque" else 0.0, remp=remp or {})
-
-
-def scenarios_params(P):
-    tr = {"Prudent": P["tr_prudent"], "Central": P["tr_central"], "Ambitieux": P["tr_ambitieux"]}
-    return {
-        sc: {"talon_evitable": P["ancre_veille"] * P["part_veille"] * t, "anomalies_evitees": ANOMALIES_EVITEES[sc],
-             "weekend_arret": WEEKEND_ARRET[sc], "fuites_cible": FUITES_CIBLE[sc],
-             "gain_autoclave": P["ancre_auto"] * t, "gain_cnc": P["ancre_cnc"] * t}
-        for sc, t in tr.items()
-    }
 
 
 @st.cache_data(show_spinner="Calcul des modèles et des gisements…")
@@ -558,7 +647,8 @@ def analyser(d: pd.DataFrame, P_json: str):
 
     # --- Fuites résiduelles (période de suivi = 2e année)
     d_post = d[d["Date"] > d["Date"].min() + pd.Timedelta(days=365)]
-    SC = scenarios_params(P)
+    SC = scenarios_params(P)      # Prudent, Central, Ambitieux et Personnalisé (choix de la page Paramètres)
+    R["SC"] = SC
 
     def gain_fuites(cible):
         if not (R["c_fuites"] > 0) or len(d_post) == 0:
@@ -577,7 +667,7 @@ def analyser(d: pd.DataFrame, P_json: str):
                    "Fuites résiduelles": fuites, "Autoclave": auto, "Usinage CNC": cnc}
     R["savings"] = pd.DataFrame(sav).T
 
-    # --- Projets, par scénario
+    # --- Projets, par scénario (le facteur d'émission suit le scénario)
     res, specs_sc, taux_pv = {}, {}, {}
     for sc in SC:
         s_ = R["savings"].loc[sc]
@@ -596,7 +686,8 @@ def analyser(d: pd.DataFrame, P_json: str):
             sps[1]["capex"] -= min(P["fte_eff"] * sps[1]["capex"], 1e18)
             sps[2]["capex"] -= min(P["fte_pv"] * sps[2]["capex"], P["fte_pv_plafond"])
         specs_sc[sc], taux_pv[sc] = sps, taux
-        res[sc] = {sp["nom"]: evaluer(sp, P, R["tarif"]) for sp in sps}
+        Psc = dict(P, fe=s["fe"])
+        res[sc] = {sp["nom"]: evaluer(sp, Psc, R["tarif"]) for sp in sps}
     R["specs"], R["taux_pv"], R["res"] = specs_sc, taux_pv, res
     return R
 
@@ -639,7 +730,8 @@ def page_overview(d, R):
     st.subheader("Objectif")
     st.markdown(
         "1. **Comprendre** la consommation : normaliser par l'activité (heures CNC, cycles d'autoclave) et distinguer jours ouvrés, week-ends et arrêt annuel.\n"
-        "2. **Chiffrer les gisements** de sobriété et d'efficacité à partir des données de l'entreprise et de benchmarks (aéronautique, Tunisie).\n"
+        "2. **Chiffrer les gisements** de sobriété et d'efficacité à partir des données de l'entreprise et de benchmarks (aéronautique, Tunisie), "
+        "en trois scénarios : **Prudent, Central, Ambitieux**.\n"
         "3. **Dimensionner** une centrale photovoltaïque d'autoconsommation.\n"
         "4. **Évaluer** chaque projet : VAN, TRI, temps de retour, VAN/I, annuité équivalente, LCOE, CO₂ évité, coût d'abattement.\n"
         "5. **Choisir** par optimisation multi-objectifs (énergie, économie, environnement)."
@@ -649,19 +741,21 @@ def page_overview(d, R):
     c2.markdown("##### 🔴 Efficacité\nAméliorer les équipements : fuites d'air comprimé, cycle d'autoclave, usinage CNC.")
     c3.markdown("##### 🟠 Photovoltaïque\nProduire sur place et autoconsommer, avec injection plafonnée du surplus.")
     if R:
+        P = st.session_state["P"]
         st.subheader("Le site en chiffres")
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Consommation annuelle", fmt(R["conso_an"] / 1e6, 2, " GWh"))
         k2.metric("Coût énergétique annuel", fmt(R["cout_an"] / 1e3, 0, " kTND"))
         k3.metric("Jours analysés", fmt(R["n"]))
-        k4.metric("Émissions annuelles (scope 2)", fmt(R["conso_an"] * st.session_state["P"]["fe"] / 1000, 0, " tCO₂"))
+        k4.metric("Émissions annuelles (scope 2)", fmt(R["conso_an"] * fe_choisi(P) / 1000, 0, " tCO₂"),
+                  help=f"Facteur d'émission retenu : {fe_choisi(P):g} kgCO₂/kWh (scénario {choix_effectifs(P)['fe']}, page Paramètres).")
     st.subheader("Comment naviguer")
     st.table(pd.DataFrame({
         "Page": ["Distribution de la consommation", "Données de l'entreprise", "Paramètres", "Benchmarking", "Dashboard"],
         "Contenu": ["Histoire de la consommation : corrélations, modèles, formules, ressources",
                     "Dictionnaire de données, indicateurs agrégés, contrôle de cohérence",
-                    "Hypothèses chiffrées, sources, modification interactive",
-                    "Cas d'entreprises utilisés (aéronautique, Tunisie, industrie)",
+                    "Hypothèses chiffrées, sources, scénario Prudent / Central / Ambitieux de chaque paramètre benchmarké",
+                    "Cas d'entreprises utilisés (aéronautique, Tunisie, industrie) et paramètres qu'ils calibrent",
                     "Les trois piliers : maths, données, ressources, choix final"],
     }))
 
@@ -685,14 +779,15 @@ def page_distribution_consommation(d, R):
                  "temp": "Température", "hum": "Humidité", "rebut": "Rebut (%)", "hp": "Heures pleines (%)", "cout": "Coût (TND)", "ipe": "IPE (kWh/h-machine)"}
     cols = [c for c in variables if c in d.columns]
     dd = d[cols].copy()
-    dd["Émissions (tCO₂)"] = d["kwh"] * P["fe"] / 1000
+    dd["Émissions (tCO₂)"] = d["kwh"] * fe_choisi(P) / 1000
     corr = dd.rename(columns=variables).corr()
     fig = px.imshow(corr, text_auto=".2f", color_continuous_scale="RdBu_r", zmin=-1, zmax=1, aspect="auto",
                     title="Matrice de corrélation — production, énergie, coût et émissions")
     fig.update_layout(height=560)
     st.plotly_chart(fig, **STRETCH)
     st.caption("Lecture : le coût et les émissions sont des dérivés de la consommation (corrélation 1) ; le taux de rebut et la température "
-               "rappellent le lien entre dérives de climatisation et qualité.")
+               f"rappellent le lien entre dérives de climatisation et qualité. Émissions calculées avec FE = {fe_choisi(P):g} kgCO₂/kWh "
+               f"(scénario {choix_effectifs(P)['fe']}).")
     st.latex(r"r_{xy}=\frac{\operatorname{cov}(x,y)}{\sigma_x\,\sigma_y}\qquad \text{tCO}_2=\frac{E_{\text{kWh}}\times FE}{1000}")
 
     st.header("Scène 3 · Normaliser l'activité : la régression")
@@ -774,41 +869,64 @@ def page_donnees(d, R):
         st.download_button("Télécharger les données nettoyées (CSV)", d.to_csv(index=False).encode("utf-8"), "aerotun_nettoye.csv", "text/csv")
 
 
-# Tableau des paramètres aligné sur le notebook Colab (mêmes valeurs et mêmes sources)
-PARAM_TABLE = pd.DataFrame(
-    [
-        ["Taux d'actualisation", "10 %", "Notebook Colab : TAUX_ACTUALISATION = 0,10 (taux directeur BCT 7 % + prime de risque ; test 7-14 %)", "Aligné Colab"],
-        ["Hausse du prix de l'électricité", "3 %/an", "Notebook Colab : HAUSSE_PRIX_ELEC = 0,03 ; barème MT STEG inchangé depuis 01/10/2022", "Aligné Colab"],
-        ["Inflation de la maintenance", "5,5 %/an", "Notebook Colab : INFLATION_OPEX = 0,055 (INS/BCT sept. 2026)", "Aligné Colab"],
-        ["Facteur d'émission du réseau", "0,58 kgCO₂/kWh", "Notebook Colab : FACTEUR_EMISSION = 0,58 (U4E 2019) ; sensibilité 0,48", "Aligné Colab"],
-        ["Prix du carbone", "50 TND/tCO₂", "Notebook Colab : PRIX_CARBONE_REF = 50 (illustratif)", "Aligné Colab"],
-        ["Taux de change", "3,0 TND/USD", "BCT, 08/10/2026", "Sourcé"],
-        ["Productible PV", "1 650 kWh/kWc/an", "Guide ANME d'autoproduction (identique Colab)", "Sourcé"],
-        ["CAPEX PV", "2 500 TND/kWc", "Notebook Colab : PV_CAPEX_KWC = 2500 ; marché 2 000-2 900 ; Safran Soliman 2 765", "Aligné Colab"],
-        ["OPEX PV (hors onduleur)", "62 TND/kWc/an", "Notebook Colab : PV_OPEX_KWC = 62 (GIZ 2013) — plus 2 % du CAPEX", "Aligné Colab"],
-        ["Remplacement onduleur", "10 % du CAPEX en année 12", "Notebook Colab : PV_ANNEE_REMPLACEMENT = 12 ; PV_PART_REMPLACEMENT = 0,10", "Aligné Colab"],
-        ["Durée de vie et dégradation PV", "20 ans ; -0,5 %/an", "Guide ANME ; notebook Colab", "Sourcé"],
-        ["Tarif d'achat du surplus", "0,12 TND/kWh", "Notebook Colab / STEG barème autoproduction", "Aligné Colab"],
-        ["Plafond de vente du surplus", "30 % de la production", "Guide ENR Tunisie 2019", "Sourcé"],
-        ["Tarif moyen implicite", "calculé", "Coût total / consommation totale des données", "Calculé"],
-        ["CAPEX / OPEX sobriété", "5 000 TND / 0", "Notebook Colab (hypothèse à remplacer par devis)", "Aligné Colab — devis prioritaires"],
-        ["CAPEX / OPEX efficacité", "85 000 TND / 2 000", "Notebook Colab (hypothèse à remplacer par devis)", "Aligné Colab — devis prioritaires"],
-        ["Durées de vie sobriété / efficacité", "5 / 10 ans", "Notebook Colab : DUREE_VIE", "Aligné Colab"],
-        ["Ancre autoclave", "-16 %", "Projet UE OPTO-CLAVE", "International"],
-        ["Ancre usinage CNC", "-12 %", "Littérature CNC", "International"],
-        ["Transférabilité du benchmark", "⅓ / ⅔ / 1", "Notebook Colab : TRANSFERT", "Aligné Colab"],
-        ["Part de veille, week-ends, anomalies, fuites", "15 % ; 15/30/50 % ; 50/75/100 % ; 11/10/8 %", "Notebook Colab", "Aligné Colab"],
-        ["Subventions FTE", "20 % PV (plafond 200 000) ; jusqu'à 50 % efficacité", "ANME (guide ER 2024)", "Sourcé"],
-    ],
-    columns=["Paramètre", "Valeur par défaut", "Source", "Statut"],
-)
+# Lignes fixes du tableau des paramètres (alignées sur le notebook Colab : mêmes valeurs et mêmes sources)
+PARAM_AVANT = [
+    ("Taux d'actualisation", "10 %", "Notebook Colab : TAUX_ACTUALISATION = 0,10 (taux directeur BCT 7 % + prime de risque ; test 7-14 %)", "Aligné Colab"),
+    ("Hausse du prix de l'électricité", "3 %/an", "Notebook Colab : HAUSSE_PRIX_ELEC = 0,03 ; barème MT STEG inchangé depuis 01/10/2022", "Aligné Colab"),
+    ("Inflation de la maintenance", "5,5 %/an", "Notebook Colab : INFLATION_OPEX = 0,055 (INS/BCT sept. 2026)", "Aligné Colab"),
+    ("Prix du carbone", "50 TND/tCO₂", "Notebook Colab : PRIX_CARBONE_REF = 50 (illustratif)", "Aligné Colab"),
+    ("Taux de change", "3,0 TND/USD", "BCT, 08/10/2026", "Sourcé"),
+]
+PARAM_APRES = [
+    ("Productible PV", "1 650 kWh/kWc/an", "Guide ANME d'autoproduction (identique Colab)", "Sourcé"),
+    ("CAPEX PV", "2 500 TND/kWc", "Notebook Colab : PV_CAPEX_KWC = 2500 ; marché 2 000-2 900 ; Safran Soliman 2 765", "Aligné Colab"),
+    ("OPEX PV (hors onduleur)", "62 TND/kWc/an", "Notebook Colab : PV_OPEX_KWC = 62 (GIZ 2013) — plus 2 % du CAPEX", "Aligné Colab"),
+    ("Remplacement onduleur", "10 % du CAPEX en année 12", "Notebook Colab : PV_ANNEE_REMPLACEMENT = 12 ; PV_PART_REMPLACEMENT = 0,10", "Aligné Colab"),
+    ("Durée de vie et dégradation PV", "20 ans ; -0,5 %/an", "Guide ANME ; notebook Colab", "Sourcé"),
+    ("Tarif d'achat du surplus", "0,12 TND/kWh", "Notebook Colab / STEG barème autoproduction", "Aligné Colab"),
+    ("Plafond de vente du surplus", "30 % de la production", "Guide ENR Tunisie 2019", "Sourcé"),
+    ("Tarif moyen implicite", "calculé", "Coût total / consommation totale des données", "Calculé"),
+    ("CAPEX / OPEX sobriété", "5 000 TND / 0", "Notebook Colab (hypothèse à remplacer par devis)", "Aligné Colab — devis prioritaires"),
+    ("CAPEX / OPEX efficacité", "85 000 TND / 2 000", "Notebook Colab (hypothèse à remplacer par devis)", "Aligné Colab — devis prioritaires"),
+    ("Durées de vie sobriété / efficacité", "5 / 10 ans", "Notebook Colab : DUREE_VIE", "Aligné Colab"),
+    ("Subventions FTE", "20 % PV (plafond 200 000) ; jusqu'à 50 % efficacité", "ANME (guide ER 2024)", "Sourcé"),
+]
+COL_SC = "Prudent / Central / Ambitieux"
+
+
+def param_table(P):
+    """Tableau des paramètres : les paramètres benchmarkés ont leur colonne Prudent / Central / Ambitieux."""
+    vb = valeurs_bench(P)
+    ch = choix_effectifs(P)
+    lignes = [[a, b, "—", "—", c, e] for a, b, c, e in PARAM_AVANT]
+    for k in CLES_BENCH:
+        lignes.append([LIBELLES[k], fmt_bench(k, vb[k]["Central"]), " / ".join(fmt_bench(k, vb[k][sc]) for sc in SCENARIOS),
+                       ch[k], SOURCES_BENCH[k], "Benchmark / hypothèse — défaut : Central"])
+    lignes.append(["Transférabilité du benchmark (pilote veille, autoclave, CNC)", "⅔", "⅓ / ⅔ / 1", "suit les trois paramètres ci-dessus",
+                   "Pratique courante : on n'applique pas un gain publié tel quel à un autre site", "Hypothèse"])
+    lignes += [[a, b, "—", "—", c, e] for a, b, c, e in PARAM_APRES]
+    return pd.DataFrame(lignes, columns=["Paramètre", "Valeur par défaut", COL_SC, "Scénario retenu", "Source", "Statut"])
 
 
 def page_parametres(d, R):
-    hero("Paramètres", "Toutes les hypothèses, leur source et leur statut. Modifie-les ci-dessous : le dashboard se recalcule.")
-    st.dataframe(PARAM_TABLE, **STRETCH, hide_index=True)
-    st.subheader("Modifier les paramètres")
+    hero("Paramètres", "Toutes les hypothèses, leur source et leur statut. Les paramètres benchmarkés existent en trois valeurs ; modifie-les ci-dessous : le dashboard se recalcule.")
     P = st.session_state["P"]
+    st.markdown("Les paramètres issus de benchmarks ne sont pas transférables tels quels : ils ont une valeur **Prudent**, **Central** et **Ambitieux**. "
+                "Le **Central** (le plus raisonnable) est retenu par défaut. Les autres paramètres n'ont qu'une valeur.")
+    st.dataframe(param_table(P), **STRETCH, hide_index=True)
+    st.caption("Facteur d'émission : Prudent = valeur la plus haute (empreinte de référence non sous-estimée) ; Ambitieux = valeur la plus basse "
+               "(réseau qui se décarbone). Les gains en % sont exprimés sur l'usage concerné (veille : part du talon).")
+
+    st.subheader("Scénario retenu par paramètre")
+    b1, b2, b3 = st.columns(3)
+    for col, sc in zip((b1, b2, b3), SCENARIOS):
+        if col.button(f"Tout en {sc}", **STRETCH, key=f"tout_{sc}"):
+            st.session_state["P"] = dict(P, choix={k: sc for k in CLES_BENCH})
+            st.rerun()
+
+    st.subheader("Modifier les paramètres")
+    vb = valeurs_bench(P)
+    ch = choix_effectifs(P)
     with st.form("form_params"):
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -816,8 +934,8 @@ def page_parametres(d, R):
             taux = st.number_input("Taux d'actualisation", 0.0, 0.5, float(P["taux"]), 0.005, format="%.3f")
             g = st.number_input("Hausse du prix de l'électricité", 0.0, 0.3, float(P["g"]), 0.005, format="%.3f")
             infl = st.number_input("Inflation de la maintenance", 0.0, 0.3, float(P["infl"]), 0.005, format="%.3f")
-            fe = st.number_input("Facteur d'émission (kgCO₂/kWh)", 0.1, 1.2, float(P["fe"]), 0.01)
             prix_c = st.number_input("Prix du carbone (TND/tCO₂)", 0.0, 1000.0, float(P["prix_carbone"]), 5.0)
+            st.caption("Facteur d'émission : voir les scénarios ci-dessous.")
         with c2:
             st.markdown("**Photovoltaïque**")
             kwc = st.number_input("Puissance (kWc)", 10.0, 2000.0, float(P["pv_kwc"]), 10.0)
@@ -832,48 +950,57 @@ def page_parametres(d, R):
             capex_eff = st.number_input("CAPEX efficacité (TND)", 0.0, 2000000.0, float(P["capex_eff"]), 5000.0)
             opex_eff = st.number_input("OPEX efficacité (TND/an)", 0.0, 200000.0, float(P["opex_eff"]), 500.0)
             part_veille = st.number_input("Part de veille dans le talon", 0.0, 1.0, float(P["part_veille"]), 0.01)
+        st.markdown("**Scénario de chaque paramètre benchmarké** (Central par défaut)")
+        nouveau_choix = {}
+        grille = st.columns(4)
+        for i, k in enumerate(CLES_BENCH):
+            with grille[i % 4]:
+                nouveau_choix[k] = st.selectbox(
+                    LIBELLES[k], SCENARIOS, index=SCENARIOS.index(ch[k]),
+                    format_func=lambda sc, k=k: f"{sc} ({fmt_bench(k, vb[k][sc])})")
         ok = st.form_submit_button("Appliquer les paramètres", type="primary")
     if ok:
         nouveau = dict(P)
-        nouveau.update(taux=taux, g=g, infl=infl, fe=fe, prix_carbone=prix_c, pv_kwc=kwc, pv_prod=prod, pv_capex_kwc=capex_kwc,
+        nouveau.update(taux=taux, g=g, infl=infl, prix_carbone=prix_c, pv_kwc=kwc, pv_prod=prod, pv_capex_kwc=capex_kwc,
                        pv_opex_kwc=opex_kwc, tarif_vente=t_vente, capex_sob=capex_sob, opex_sob=opex_sob, capex_eff=capex_eff,
-                       opex_eff=opex_eff, part_veille=part_veille)
+                       opex_eff=opex_eff, part_veille=part_veille, choix=nouveau_choix)
         st.session_state["P"] = nouveau
-        st.success("Paramètres appliqués. Ouvre le Dashboard pour voir les résultats.")
+        st.success("Paramètres appliqués. Ouvre le Dashboard (scénario « Personnalisé ») pour voir les résultats.")
     if st.button("Revenir aux valeurs par défaut"):
-        st.session_state["P"] = dict(P_DEFAUT)
+        st.session_state["P"] = p_defaut()
         st.rerun()
 
 
 BENCH = pd.DataFrame(
     [
-        ["Aéronautique", "OPTO-CLAVE (projet UE)", "Autoclave", "Optimisation du cycle de cuisson d'un panneau composite", "-16 % d'énergie ; -12 % de durée", 16.0, "Élevée (un cas)"],
-        ["Aéronautique", "GKN Aerospace / US Air Force", "Usinage CNC", "Outils, lubrification, programmation, paramètres de coupe", "jusqu'à -73 % (cellule)", 73.0, "Moyenne (borne très haute)"],
-        ["Aéronautique", "Politecnico di Milano", "Usinage CNC", "Mise en veille par composants", "gains significatifs (non chiffrés)", np.nan, "Moyenne"],
-        ["Aéronautique", "Fabricant aéronautique (Kaeser)", "Air comprimé", "Régulation et dimensionnement des compresseurs", "-7 % de puissance spécifique", 7.0, "Moyenne"],
-        ["Aéronautique", "Safran (sites européens)", "Sobriété", "Plan de sobriété du groupe", "-10 % d'énergie (2024 vs 2019)", 10.0, "Moyenne"],
-        ["Aéronautique", "Plymouth « cool-clave »", "Autoclave", "Pressurisation à l'air froid", "≈ -35 % (estimation)", 35.0, "Faible"],
-        ["Industrie générale", "General Dynamics (munitions)", "Sobriété", "Arrêts le week-end, consignes de refroidissement", "+11,9 % de performance (3 ans)", 11.9, "Moyenne"],
-        ["Industrie générale", "Volvo CE", "Sobriété", "Habitudes opérateurs, arrêt des machines à vide", "-14 % d'électricité totale", 14.0, "Moyenne"],
-        ["Industrie générale", "Cummins", "Sobriété", "Management de l'énergie, changements à faible coût", "+12,6 % de performance", 12.6, "Moyenne"],
-        ["Industrie générale", "Graham Packaging", "Sobriété", "Arrêt automatique de charges à vide", "-3 % d'électricité totale", 3.0, "Moyenne"],
-        ["Industrie générale", "Johnson Controls", "Air comprimé", "Gestion des fuites, suivi de pression", "-39 % d'électricité d'air comprimé", 39.0, "Moyenne"],
-        ["Industrie générale", "Programme DOE ISO 50001 / SEP", "Efficacité", "Diagnostic, procédés, modernisation", "5,6 % à 30,6 % sur 3 ans", 30.6, "Moyenne"],
-        ["Tunisie", "ANME — audit énergétique obligatoire", "Industrie (grands consommateurs)", "Audit et cogénération (thermique inclus)", "-30 % de facture ; -35 % d'énergie primaire", 30.0, "Moyenne (presse)"],
-        ["Tunisie", "ANME — cimenterie (récupération de chaleur)", "Électricité", "Récupération de chaleur", "-30 % d'électricité ; retour < 2 ans", 30.0, "Moyenne (presse)"],
-        ["Tunisie", "ANME / GIZ — diagnostic de l'air comprimé", "Air comprimé", "Cahier des charges des diagnostics (2021)", "rendement de l'air comprimé souvent limité à 10-15 %", np.nan, "Moyenne (presse)"],
-        ["Tunisie", "ANME — contrats-programmes", "Industrie", "Investissements d'efficacité", "retour ≈ 2 ans ; tep économisée ≈ 152 DT", np.nan, "Moyenne (ancien)"],
-        ["Tunisie", "Safran Soliman", "Photovoltaïque", "PV 974,7 kWc ; couverture ≈ 16,8 %", "retour annoncé 6-7 ans", np.nan, "Moyenne (fiche non auditée)"],
+        ["Aéronautique", "OPTO-CLAVE (projet UE)", "Autoclave", "Optimisation du cycle de cuisson d'un panneau composite", "-16 % d'énergie ; -12 % de durée", 16.0, "Élevée (un cas)", "Gain autoclave (ancre −16 %)"],
+        ["Aéronautique", "GKN Aerospace / US Air Force", "Usinage CNC", "Outils, lubrification, programmation, paramètres de coupe", "jusqu'à -73 % (cellule)", 73.0, "Moyenne (borne très haute)", "Justifie le levier CNC (non utilisé directement)"],
+        ["Aéronautique", "Politecnico di Milano", "Usinage CNC", "Mise en veille par composants", "gains significatifs (non chiffrés)", np.nan, "Moyenne", "Veille évitable (qualitatif)"],
+        ["Aéronautique", "Fabricant aéronautique (Kaeser)", "Air comprimé", "Régulation et dimensionnement des compresseurs", "-7 % de puissance spécifique", 7.0, "Moyenne", "Fuites cible (contexte)"],
+        ["Aéronautique", "Safran (sites européens)", "Sobriété", "Plan de sobriété du groupe", "-10 % d'énergie (2024 vs 2019)", 10.0, "Moyenne", "Contrôle de cohérence"],
+        ["Aéronautique", "Plymouth « cool-clave »", "Autoclave", "Pressurisation à l'air froid", "≈ -35 % (estimation)", 35.0, "Faible", "Non retenu"],
+        ["Industrie générale", "General Dynamics (munitions)", "Sobriété", "Arrêts le week-end, consignes de refroidissement", "+11,9 % de performance (3 ans)", 11.9, "Moyenne", "Week-ends en mode arrêt (contexte)"],
+        ["Industrie générale", "Volvo CE", "Sobriété", "Habitudes opérateurs, arrêt des machines à vide", "-14 % d'électricité totale", 14.0, "Moyenne", "Veille évitable (contexte)"],
+        ["Industrie générale", "Cummins", "Sobriété", "Management de l'énergie, changements à faible coût", "+12,6 % de performance", 12.6, "Moyenne", "Contrôle de cohérence"],
+        ["Industrie générale", "Graham Packaging", "Sobriété", "Arrêt automatique de charges à vide", "-3 % d'électricité totale", 3.0, "Moyenne", "Veille évitable (contexte)"],
+        ["Industrie générale", "Johnson Controls", "Air comprimé", "Gestion des fuites, suivi de pression", "-39 % d'électricité d'air comprimé", 39.0, "Moyenne", "Fuites cible (contexte)"],
+        ["Industrie générale", "Programme DOE ISO 50001 / SEP", "Efficacité", "Diagnostic, procédés, modernisation", "5,6 % à 30,6 % sur 3 ans", 30.6, "Moyenne", "Contrôle de cohérence"],
+        ["Tunisie", "ANME — audit énergétique obligatoire", "Industrie (grands consommateurs)", "Audit et cogénération (thermique inclus)", "-30 % de facture ; -35 % d'énergie primaire", 30.0, "Moyenne (presse)", "Contrôle de cohérence"],
+        ["Tunisie", "ANME — cimenterie (récupération de chaleur)", "Électricité", "Récupération de chaleur", "-30 % d'électricité ; retour < 2 ans", 30.0, "Moyenne (presse)", "Contrôle de cohérence"],
+        ["Tunisie", "ANME / GIZ — diagnostic de l'air comprimé", "Air comprimé", "Cahier des charges des diagnostics (2021)", "rendement de l'air comprimé souvent limité à 10-15 %", np.nan, "Moyenne (presse)", "Fuites cible (objectif ANME : taux divisé par deux)"],
+        ["Tunisie", "ANME — contrats-programmes", "Industrie", "Investissements d'efficacité", "retour ≈ 2 ans ; tep économisée ≈ 152 DT", np.nan, "Moyenne (ancien)", "Contrôle de cohérence"],
+        ["Tunisie", "Safran Soliman", "Photovoltaïque", "PV 974,7 kWc ; couverture ≈ 16,8 %", "retour annoncé 6-7 ans", np.nan, "Moyenne (fiche non auditée)", "Facteur d'émission (Prudent, 0,587) ; CAPEX PV"],
     ],
-    columns=["Domaine", "Entreprise / source", "Cible", "Levier", "Résultat publié", "Gain (%)", "Fiabilité"],
+    columns=["Domaine", "Entreprise / source", "Cible", "Levier", "Résultat publié", "Gain (%)", "Fiabilité", "Paramètre calibré"],
 )
 
 
 def page_benchmarking(d, R):
     hero("Benchmarking", "Les modèles d'entreprises utilisés pour calibrer les gisements et contrôler les résultats.")
+    P = st.session_state["P"]
     st.markdown("Les gains machine par machine (autoclave, CNC) viennent de cas **aéronautiques internationaux**, faute d'équivalent tunisien publié. "
                 "Les références **tunisiennes** (ANME, STEG, GIZ, Safran Soliman) servent aux coûts, tarifs, subventions et contrôles de plausibilité. "
-                "Les résultats ne sont pas transférables tels quels : on applique un facteur de transférabilité (⅓, ⅔, 1).")
+                "Les résultats ne sont pas transférables tels quels : chaque paramètre calibré a une valeur **Prudent / Central / Ambitieux**.")
     domaines = st.multiselect("Domaines", sorted(BENCH["Domaine"].unique()), default=sorted(BENCH["Domaine"].unique()))
     b = BENCH[BENCH["Domaine"].isin(domaines)]
     st.dataframe(b.drop(columns=["Gain (%)"]), **STRETCH, hide_index=True)
@@ -883,12 +1010,16 @@ def page_benchmarking(d, R):
                      title="Gains publiés (ordre de grandeur, périmètres différents)")
         fig.update_layout(height=520, yaxis=dict(autorange="reversed"))
         st.plotly_chart(fig, **STRETCH)
+
+    st.subheader("Paramètres calibrés par ces benchmarks")
+    st.dataframe(table_scenarios(P), **STRETCH, hide_index=True)
+    st.caption("Le scénario retenu se choisit dans la page Paramètres (Central par défaut).")
+
     if R is not None:
         st.subheader("Safran Soliman vs AEROTUN (photovoltaïque)")
-        P = st.session_state["P"]
         saf = dict(kwc=974.7, prod=1_500_000.0, capex=2_695_000.0, gain=410_000.0, conso=8_935_000.0)
-        sp = R["specs"]["Central"][2]
-        res = R["res"]["Central"]["Photovoltaïque"]
+        sp = R["specs"][PERSO][2]
+        res = R["res"][PERSO]["Photovoltaïque"]
         prod_a = sp["kwh"] + sp["surplus"]
         tab = pd.DataFrame({
             "Safran Soliman (fiche)": [saf["kwc"], saf["prod"], saf["prod"] / saf["kwc"], saf["capex"] / saf["kwc"],
@@ -899,14 +1030,17 @@ def page_benchmarking(d, R):
                   "Gain (TND/kWh produit)", "Payback simple (ans)"])
         st.dataframe(tab.style.format("{:,.2f}"), **STRETCH)
         st.caption("Chiffres Safran : fiche projet reprise dans le document fourni (non auditée). Safran consomme environ "
-                   f"{saf['conso'] / R['conso_an']:.1f} fois plus qu'AEROTUN.")
+                   f"{saf['conso'] / R['conso_an']:.1f} fois plus qu'AEROTUN : son facteur d'émission (0,587 kgCO₂/kWh) est donc placé en scénario "
+                   f"Prudent ; AEROTUN utilise {fe_choisi(P):g} (scénario {choix_effectifs(P)['fe']}).")
 
 
 def page_dashboard(d, R):
     hero("Dashboard", "Les trois piliers à suivre : les maths, les données de l'entreprise, les ressources — et le choix final.")
     P = st.session_state["P"]
     c1, c2 = st.columns([2, 1])
-    scenario = c1.radio("Scénario de gisement", ["Prudent", "Central", "Ambitieux"], index=1, horizontal=True)
+    scenario = c1.radio("Scénario de gisement", SCENARIOS + [PERSO], index=3, horizontal=True, key="scenario_dash",
+                        help="Prudent / Central / Ambitieux : tous les paramètres benchmarkés dans le même scénario. "
+                             "Personnalisé : le scénario choisi paramètre par paramètre dans la page Paramètres (Central par défaut).")
     fte = c2.toggle("Avec subventions FTE (borne haute)", value=P["fte"])
     if fte != P["fte"]:
         st.session_state["P"] = dict(P, fte=fte)
@@ -915,6 +1049,10 @@ def page_dashboard(d, R):
     specs = R["specs"][scenario]
     sav = R["savings"].loc[scenario]
     tarif = R["tarif"]
+    Pv = dict(P, fe=R["SC"][scenario]["fe"])      # paramètres + facteur d'émission du scénario affiché
+
+    with st.expander(f"Paramètres benchmarkés appliqués — scénario {scenario}"):
+        st.dataframe(table_scenarios(P, R["SC"][scenario]["choix"]), **STRETCH, hide_index=True)
 
     t_sob, t_eff, t_pv, t_cmp = st.tabs(["🟢 Sobriété", "🔴 Efficacité", "🟠 Photovoltaïque", "⚖️ Comparaison et choix"])
 
@@ -928,7 +1066,7 @@ def page_dashboard(d, R):
         a, b, c, e = st.columns(4)
         a.metric("Payback actualisé", fmt(r["Payback actualisé (ans)"], 1, " ans"))
         b.metric("VAN/I", fmt(r["VAN/I"], 2))
-        c.metric("CO₂ évité (t/an, an 1)", fmt(r["CO2 évité an 1 (t)"], 0))
+        c.metric("CO₂ évité (t/an, an 1)", fmt(r["CO2 évité an 1 (t)"], 0), help=f"Facteur d'émission du scénario {scenario} : {Pv['fe']:g} kgCO₂/kWh")
         e.metric("Coût d'abattement (TND/tCO₂)", fmt(r["Coût d'abattement (TND/tCO2)"], 0))
 
     # ---------------- Sobriété
@@ -1001,7 +1139,7 @@ def page_dashboard(d, R):
                 s_ = spec("Photovoltaïque", au, P, su, capex=capex,
                           opex=P["pv_opex_kwc"] * k,
                           remp={int(P["pv_remp_an"]): P["pv_remp_part"] * capex})
-                r = evaluer(s_, P, tarif)
+                r = evaluer(s_, Pv, tarif)
                 lignes.append({"kWc": k, "Autoconsommation (%)": tx * 100, "VAN (TND)": r["VAN (TND)"], "TRI (%)": r["TRI (%)"]})
             sweep = pd.DataFrame(lignes)
             fig = px.line(sweep, x="kWc", y="VAN (TND)", markers=True, title="VAN selon la puissance installée (CAPEX/kWc constant)")
@@ -1059,6 +1197,16 @@ def page_dashboard(d, R):
         fig.update_layout(title="Flux de trésorerie cumulés actualisés (TND)", xaxis_title="Année", height=380)
         st.plotly_chart(fig, **STRETCH)
 
+        st.markdown("#### Les trois scénarios côte à côte")
+        lignes_sc = []
+        for sc in SCENARIOS + [PERSO]:
+            for nom in PROJETS:
+                r = R["res"][sc][nom]
+                lignes_sc.append({"Scénario": sc, "Projet": nom, "Économie (kWh/an)": r["Économie (kWh/an, an 1)"], "VAN (TND)": r["VAN (TND)"],
+                                  "TRI (%)": r["TRI (%)"], "FE (kgCO₂/kWh)": R["SC"][sc]["fe"], "CO₂ évité an 1 (t)": r["CO2 évité an 1 (t)"]})
+        st.dataframe(pd.DataFrame(lignes_sc).set_index(["Projet", "Scénario"]).sort_index().style.format(
+            {"Économie (kWh/an)": "{:,.0f}", "VAN (TND)": "{:,.0f}", "TRI (%)": "{:.1f}", "FE (kgCO₂/kWh)": "{:g}", "CO₂ évité an 1 (t)": "{:,.1f}"}), **STRETCH)
+
         st.markdown("#### Choix multicritère (programmation par objectif)")
         w1, w2, w3 = st.columns(3)
         w_e = w1.slider("Poids énergie", 0.0, 1.0, 1 / 3, 0.05)
@@ -1074,7 +1222,7 @@ def page_dashboard(d, R):
             score = (ecart["Énergie"] * w_e + ecart["Économie"] * w_a + ecart["Environnement"] * w_c) / s
             st.latex(r"S_i=\sum_k w_k\,\frac{x_k^{\max}-x_{i,k}}{x_k^{\max}-x_k^{\min}}\quad(\text{minimiser})")
             st.bar_chart(score.rename("Score (plus bas = meilleur)"))
-            st.success(f"Projet retenu avec ces poids : **{score.idxmin()}**")
+            st.success(f"Projet retenu avec ces poids (scénario {scenario}) : **{score.idxmin()}**")
             dom = [i for i in PROJETS if any(j != i and (crit.loc[j] >= crit.loc[i]).all() and (crit.loc[j] > crit.loc[i]).any() for j in PROJETS)]
             st.caption("Projets dominés au sens de Pareto : " + (", ".join(dom) if dom else "aucun (les trois sont Pareto-optimaux)"))
 
@@ -1083,10 +1231,10 @@ def page_dashboard(d, R):
         sp_sel = specs[PROJETS.index(proj)]
         taux_grid = [0.07, 0.08, 0.10, 0.12, 0.14]
         g_grid = [0.0, 0.03, 0.05, 0.06]
-        mat = pd.DataFrame({f"g = {g:.0%}": [evaluer(sp_sel, P, tarif, a=a, g=g)["VAN (TND)"] for a in taux_grid] for g in g_grid},
+        mat = pd.DataFrame({f"g = {g:.0%}": [evaluer(sp_sel, Pv, tarif, a=a, g=g)["VAN (TND)"] for a in taux_grid] for g in g_grid},
                            index=[f"a = {a:.0%}" for a in taux_grid])
         st.plotly_chart(px.imshow(mat, text_auto=",.0f", color_continuous_scale="RdYlGn", aspect="auto",
-                                  title=f"VAN de {proj} : taux d'actualisation × hausse du prix de l'électricité"), **STRETCH)
+                                  title=f"VAN de {proj} (scénario {scenario}) : taux d'actualisation × hausse du prix de l'électricité"), **STRETCH)
         ressources([("Formation ANME/GIZ : taux d'actualisation, croissance des tarifs (module 3)", "https://energypedia.info/images/8/8e/Module_3_Formation_BE.pdf"),
                     ("Prix indicatif du carbone proposé en Tunisie (La Presse/allAfrica, 2026)", "https://fr.allafrica.com/stories/202603240305.html"),
                     ("IRENA — Renewable Cost Database", ""), ("BCT — taux directeur et inflation", "https://fr.allafrica.com/stories/202610080466.html"),
@@ -1102,7 +1250,9 @@ ICONES = {"Overview": "🏠", "Distribution de la consommation": "📖", "Donné
 if "page" not in st.session_state:
     st.session_state["page"] = "Overview"
 if "P" not in st.session_state:
-    st.session_state["P"] = dict(P_DEFAUT)
+    st.session_state["P"] = p_defaut()
+else:   # compatibilité avec une session ouverte avant l'ajout des scénarios
+    st.session_state["P"] = {**p_defaut(), **st.session_state["P"]}
 
 st.sidebar.title("⚡ AEROTUN")
 for p in PAGES:
