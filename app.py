@@ -1208,19 +1208,29 @@ def page_dashboard(d, R):
             {"Économie (kWh/an)": "{:,.0f}", "VAN (TND)": "{:,.0f}", "TRI (%)": "{:.1f}", "FE (kgCO₂/kWh)": "{:g}", "CO₂ évité an 1 (t)": "{:,.1f}"}), **STRETCH)
 
         st.markdown("#### Choix multicritère (programmation par objectif)")
+        st.caption("Les poids sont normalisés pour que leur somme vaille exactement 1.")
         w1, w2, w3 = st.columns(3)
-        w_e = w1.slider("Poids énergie", 0.0, 1.0, 1 / 3, 0.05)
-        w_a = w2.slider("Poids économie (AE)", 0.0, 1.0, 1 / 3, 0.05)
-        w_c = w3.slider("Poids environnement (CO₂)", 0.0, 1.0, 1 / 3, 0.05)
-        s = w_e + w_a + w_c
+        w_e_raw = w1.slider("Poids énergie", 0.0, 1.0, 1 / 3, 0.05, key="mc_w_e")
+        w_a_raw = w2.slider("Poids économie (AE)", 0.0, 1.0, 1 / 3, 0.05, key="mc_w_a")
+        w_c_raw = w3.slider("Poids environnement (CO₂)", 0.0, 1.0, 1 / 3, 0.05, key="mc_w_c")
+        s = w_e_raw + w_a_raw + w_c_raw
         if s == 0:
             st.warning("Au moins un poids doit être non nul.")
         else:
+            w_e, w_a, w_c = w_e_raw / s, w_a_raw / s, w_c_raw / s
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Poids énergie (normalisé)", f"{w_e:.3f}")
+            m2.metric("Poids économie (normalisé)", f"{w_a:.3f}")
+            m3.metric("Poids environnement (normalisé)", f"{w_c:.3f}")
             crit = table[["Économie (kWh/an, an 1)", "AE (TND/an)", "CO2 évité moy. (t/an)"]].copy()
             crit.columns = ["Énergie", "Économie", "Environnement"]
             ecart = ((crit.max() - crit) / (crit.max() - crit.min()).replace(0, np.nan)).fillna(0.0)
-            score = (ecart["Énergie"] * w_e + ecart["Économie"] * w_a + ecart["Environnement"] * w_c) / s
-            st.latex(r"S_i=\sum_k w_k\,\frac{x_k^{\max}-x_{i,k}}{x_k^{\max}-x_k^{\min}}\quad(\text{minimiser})")
+            score = ecart["Énergie"] * w_e + ecart["Économie"] * w_a + ecart["Environnement"] * w_c
+            st.latex(
+                r"S_i=\sum_k \tilde{w}_k\,\dfrac{x_k^{\max}-x_{i,k}}{x_k^{\max}-x_k^{\min}}"
+                r"\quad\text{avec}\quad \tilde{w}_k=\dfrac{w_k}{\sum_j w_j},\quad\sum_k\tilde{w}_k=1"
+                r"\quad(\text{à minimiser})"
+            )
             st.bar_chart(score.rename("Score (plus bas = meilleur)"))
             st.success(f"Projet retenu avec ces poids (scénario {scenario}) : **{score.idxmin()}**")
             dom = [i for i in PROJETS if any(j != i and (crit.loc[j] >= crit.loc[i]).all() and (crit.loc[j] > crit.loc[i]).any() for j in PROJETS)]
