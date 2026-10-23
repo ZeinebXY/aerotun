@@ -790,22 +790,6 @@ def page_distribution_consommation(d, R):
                f"(scénario {choix_effectifs(P)['fe']}).")
     st.latex(r"r_{xy}=\frac{\operatorname{cov}(x,y)}{\sigma_x\,\sigma_y}\qquad \text{tCO}_2=\frac{E_{\text{kWh}}\times FE}{1000}")
 
-    st.header("Scène 3 · Normaliser l'activité : la régression")
-    st.markdown("Une journée chargée consomme naturellement plus qu'une journée calme. Pour juger la performance, on compare la consommation "
-                "observée à celle **attendue pour l'activité du jour**.")
-    st.latex(r"E_t=\beta_0+\beta_1H_t+\beta_2C_t+\beta_3T_t+\beta_4W_t+\beta_5A_t+\varepsilon_t")
-    st.markdown("avec $E_t$ la consommation (kWh), $H_t$ les heures-machine CNC, $C_t$ les cycles d'autoclave, $T_t$ la température de la salle "
-                "blanche, $W_t$ l'indicateur de week-end et $A_t$ l'indicateur d'arrêt annuel.")
-    st.latex(r"\text{IPE}=\frac{E}{H}\qquad R^2_{aj}\ge 0{,}75\quad CV(RMSE)\le 25\,\%\ \ (\text{ISO 50001, IPMVP, ASHRAE 14})")
-    comp = R["comp_modeles"].copy()
-    st.dataframe(comp.style.format({"R² ajusté": "{:.3f}", "CV(RMSE) %": "{:.2f}", "AIC": "{:.0f}", "p max": "{:.3f}"}), **STRETCH)
-    st.caption("Autres modèles testés et écartés : ajout de l'humidité (non significative, p = 0,63) et du jour de la semaine (non significatif, p = 0,51) ; "
-               "le week-end seul est remplacé par M6, car l'arrêt annuel explique l'écart.")
-    if R["arret_ok"]:
-        st.success(f"Modèle M6 : l'arrêt annuel retire en moyenne **{abs(R['coef_arret']):,.0f} kWh/jour**, alors que les week-ends "
-                   f"consomment comme un jour ouvré à activité nulle (effet {R['coef_we']:+.0f} kWh/j, p = {R['p_we']:.2f}). "
-                   f"Le site sait donc fonctionner avec une base bien plus basse : c'est le levier de sobriété des week-ends.")
-
     st.header("Scène 4 · Jours ouvrés, week-ends et congés")
     par_type = d.groupby("type_jour").agg(jours=("kwh", "size"), kwh_jour=("kwh", "mean"), cnc=("cnc", "mean"), kwh_total=("kwh", "sum"))
     par_type["Part de la conso. (%)"] = par_type["kwh_total"] / par_type["kwh_total"].sum() * 100
