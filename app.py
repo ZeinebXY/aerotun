@@ -950,7 +950,7 @@ def page_parametres(d, R):
             capex_eff = st.number_input("CAPEX efficacité (TND)", 0.0, 2000000.0, float(P["capex_eff"]), 5000.0)
             opex_eff = st.number_input("OPEX efficacité (TND/an)", 0.0, 200000.0, float(P["opex_eff"]), 500.0)
             part_veille = st.number_input("Part de veille dans le talon", 0.0, 1.0, float(P["part_veille"]), 0.01)
-        st.markdown("**Scénario de chaque paramètre benchmarké** (Central par défaut)")
+        st.markdown("**Scénario de chaque paramètre benchmarké** (Ambitieux par défaut)")
         nouveau_choix = {}
         grille = st.columns(4)
         for i, k in enumerate(CLES_BENCH):
