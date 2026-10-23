@@ -1208,29 +1208,37 @@ def page_dashboard(d, R):
             {"Économie (kWh/an)": "{:,.0f}", "VAN (TND)": "{:,.0f}", "TRI (%)": "{:.1f}", "FE (kgCO₂/kWh)": "{:g}", "CO₂ évité an 1 (t)": "{:,.1f}"}), **STRETCH)
 
         st.markdown("#### Choix multicritère (programmation par objectif)")
-        st.caption("La somme des poids est contrainte à 1 : le poids environnement est calculé automatiquement.")
+        st.caption("Renseignez indépendamment chaque poids entre 0 et 1, puis cliquez sur **Simuler**. La somme des poids doit être inférieure ou égale à 1.")
         w1, w2, w3 = st.columns(3)
         with w1:
-            w_e = st.slider("Poids énergie", 0.0, 1.0, 1 / 3, 0.05, key="mc_w_e")
+            w_e = st.number_input("Poids énergie", min_value=0.0, max_value=1.0, value=1 / 3, step=0.05, format="%.2f", key="mc_w_e")
         with w2:
-            w_a = st.slider("Poids économie (AE)", 0.0, max(0.0, 1.0 - w_e), min(1 / 3, max(0.0, 1.0 - w_e)), 0.05, key="mc_w_a")
-        w_c = 1.0 - w_e - w_a
+            w_a = st.number_input("Poids économie (AE)", min_value=0.0, max_value=1.0, value=1 / 3, step=0.05, format="%.2f", key="mc_w_a")
         with w3:
-            st.metric("Poids environnement (CO₂)", f"{w_c:.2f}")
-            st.caption("= 1 − énergie − économie")
-        st.caption(f"Somme des poids : **{w_e + w_a + w_c:.2f}** (toujours 1)")
-        crit = table[["Économie (kWh/an, an 1)", "AE (TND/an)", "CO2 évité moy. (t/an)"]].copy()
-        crit.columns = ["Énergie", "Économie", "Environnement"]
-        ecart = ((crit.max() - crit) / (crit.max() - crit.min()).replace(0, np.nan)).fillna(0.0)
-        score = ecart["Énergie"] * w_e + ecart["Économie"] * w_a + ecart["Environnement"] * w_c
-        st.latex(
-            r"S_i=\sum_k w_k\,\dfrac{x_k^{\max}-x_{i,k}}{x_k^{\max}-x_k^{\min}}"
-            r"\quad\text{avec}\quad \sum_k w_k=1\quad(\text{à minimiser})"
-        )
-        st.bar_chart(score.rename("Score (plus bas = meilleur)"))
-        st.success(f"Projet retenu avec ces poids (scénario {scenario}) : **{score.idxmin()}**")
-        dom = [i for i in PROJETS if any(j != i and (crit.loc[j] >= crit.loc[i]).all() and (crit.loc[j] > crit.loc[i]).any() for j in PROJETS)]
-        st.caption("Projets dominés au sens de Pareto : " + (", ".join(dom) if dom else "aucun (les trois sont Pareto-optimaux)"))
+            w_c = st.number_input("Poids environnement (CO₂)", min_value=0.0, max_value=1.0, value=1 / 3, step=0.05, format="%.2f", key="mc_w_c")
+        somme_poids = w_e + w_a + w_c
+        st.caption(f"Somme des poids : **{somme_poids:.2f}**")
+        simuler = st.button("Simuler", type="primary", key="mc_simuler")
+        if simuler:
+            if somme_poids > 1.0 + 1e-9:
+                st.error(f"Erreur : la somme des poids ({somme_poids:.2f}) est supérieure à 1. Veuillez ajuster les valeurs.")
+            else:
+                crit = table[["Économie (kWh/an, an 1)", "AE (TND/an)", "CO2 évité moy. (t/an)"]].copy()
+                crit.columns = ["Énergie", "Économie", "Environnement"]
+                ecart = ((crit.max() - crit) / (crit.max() - crit.min()).replace(0, np.nan)).fillna(0.0)
+                score = ecart["Énergie"] * w_e + ecart["Économie"] * w_a + ecart["Environnement"] * w_c
+                st.latex(
+                    r"S_i=\sum_k w_k\,\dfrac{x_k^{\max}-x_{i,k}}{x_k^{\max}-x_k^{\min}}"
+                    r"\quad\text{(à minimiser)}"
+                )
+                if abs(somme_poids - 1.0) > 1e-6:
+                    st.info(f"Somme des poids = {somme_poids:.2f} (≤ 1). Les poids sont utilisés tels quels (sans renormalisation).")
+                st.bar_chart(score.rename("Score (plus bas = meilleur)"))
+                st.success(f"Projet retenu avec ces poids (scénario {scenario}) : **{score.idxmin()}**")
+                dom = [i for i in PROJETS if any(j != i and (crit.loc[j] >= crit.loc[i]).all() and (crit.loc[j] > crit.loc[i]).any() for j in PROJETS)]
+                st.caption("Projets dominés au sens de Pareto : " + (", ".join(dom) if dom else "aucun (les trois sont Pareto-optimaux)"))
+        else:
+            st.info("Ajustez les poids puis cliquez sur **Simuler** pour calculer le score multicritère.")
 
         st.markdown("#### Sensibilité de la VAN")
         proj = st.selectbox("Projet", PROJETS, index=2)
